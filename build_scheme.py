@@ -4,10 +4,16 @@ import pandas as pd
 from sqlalchemy import create_engine
 import networkx as nx
 import osmnx as ox
+from geopandas import GeoDataFrame
 
 
-# convert list to string if necessary
 def list_to_str(row, columns):
+    """
+    convert list in columns to string
+    :param row:
+    :param columns:
+    :return:
+    """
     try:
         for column in columns:
             if isinstance(row[column], list):
@@ -22,8 +28,10 @@ def prepare_osm_data():
     # define the tags that should be downloaded with the network
     useful_tags_path = ['osmid', 'highway', 'name', 'oneway', 'maxspeed', 'layer', 'bridge', 'tunnel']
     ox.utils.config(useful_tags_way=useful_tags_path)
+    # download data from OSM based on polygon boundaries
     area = gpd.read_file(r'shp_files\munich_4326.shp')['geometry'][0]
     graph = ox.graph_from_polygon(area, network_type='all')
+    # project to espg:3857 ,create undirected and create gdf
     graph_pr = ox.project_graph(graph)
     graph_pr = graph_pr.to_undirected()
     gdf_format = ox.graph_to_gdfs(graph_pr)
@@ -41,10 +49,7 @@ def prepare_osm_data():
 
 def incident_def():
     # upload files
-    if params['test']:
-        incident = gpd.read_file('shp_files/Incident_data.shp', rows=10)
-    else:
-        incident = gpd.read_file('shp_files/Incident_data.shp')
+    incident = gpd.read_file('shp_files/Incident_data.shp')
 
     # change table names
     incident.rename(
@@ -71,79 +76,71 @@ def incident_def():
     # new fields, , walcycdata_id = a unique number with leading 1 for incidents
     n = len(incident)
     incident['walcycdata_id'], incident['walcycdata_is_valid'], incident['walcycdata_last_modified'], incident[
-        'osm_walcycdata_id'] = pd.Series(map(lambda x: '1' + x, np.arange(n).astype(str))), True, date, ''
+        'osm_walcycdata_id'] = pd.Series(map(lambda x: int('1' + x), np.arange(n).astype(str))), True, date, ''
     incident = gis_opers_for_all(incident)
     return incident
 
 
-def cycle_count_def():
-    # upload files
-    if params['test']:
-        cycle_count = gpd.read_file('shp_files/cycle_count_data.shp', rows=10)
-    else:
-        cycle_count = gpd.read_file('shp_files/cycle_count_data.shp')
-
+def cycle_count_def(count):
+    # project and clip
+    count = gis_opers_for_all(count, "ZAEHLUN~19")
     # change table names
-    cycle_count.rename(
-        columns={"NO": "Cyclecount_id", "ZAEHLUN~19": "Cyclecount_count"}, inplace=True)
+    count.rename(
+        columns={"NO": "Cyclecount_id", "count": "Cyclecount_count"}, inplace=True)
 
     # drop fields
-    cycle_count = cycle_count[['Cyclecount_id', 'Cyclecount_count', 'geometry']]
+    count = count[['Cyclecount_id', 'Cyclecount_count', 'geometry']]
 
     # new fields, walcycdata_id = a unique number with leading 2 for cycle count
-    n = len(cycle_count)
-    cycle_count['walcycdata_id'], cycle_count['walcycdata_is_valid'], cycle_count['walcycdata_last_modified'], \
-    cycle_count['osm_walcycdata_id'], cycle_count['Cyclecount_timestamp_start'], cycle_count[
-        'Cyclecount_timestamp_end'] = pd.Series(
-        map(lambda x: '2' + x, np.arange(n).astype(str))), True, date, '', '', ''
-    cycle_count = gis_opers_for_all(cycle_count)
-    return cycle_count
+    n = len(count)
+    count['walcycdata_id'] = pd.Series(map(lambda x: int('2' + x), np.arange(n).astype(str)))
+    count['walcycdata_is_valid'], count['walcycdata_last_modified'], \
+    count['osm_walcycdata_id'], count['Cyclecount_timestamp_start'], count[
+        'Cyclecount_timestamp_end'] = True, date, '', '', ''
+    return count
 
 
-def car_count_def():
-    # upload files
-    if params['test']:
-        car_count = gpd.read_file('shp_files/cars_count_data.shp', rows=10)
-    else:
-        car_count = gpd.read_file('shp_files/cars_count_data.shp')
-
+def car_count_def(count):
+    # project and clip
+    count = gis_opers_for_all(count, "ZOhlung_~7")
     # change table names
-    car_count.rename(
-        columns={"NO": "Carcount_id", "ZOhlung_~7": "Carcount_count"}, inplace=True)
+    count.rename(
+        columns={"NO": "Carcount_id", "count": "Carcount_count"}, inplace=True)
 
     # drop fields
-    car_count = car_count[['Carcount_id', 'Carcount_count', 'geometry']]
+    count = count[['Carcount_id', 'Carcount_count', 'geometry']]
 
     # new fields, walcycdata_id = a unique number with leading 3 for cycle count
-    n = len(car_count)
-    car_count['walcycdata_id'], car_count['walcycdata_is_valid'], car_count['walcycdata_last_modified'], \
-    car_count['osm_walcycdata_id'], car_count['Carcount_timestamp_start'], car_count[
+    n = len(count)
+    count['walcycdata_id'], count['walcycdata_is_valid'], count['walcycdata_last_modified'], \
+    count['osm_walcycdata_id'], count['Carcount_timestamp_start'], count[
         'Carcount_timestamp_end'] = pd.Series(
-        map(lambda x: '3' + x, np.arange(n).astype(str))), True, date, '', '', ''
-    car_count = gis_opers_for_all(car_count)
-    return car_count
+        map(lambda x: int('3' + x), np.arange(n).astype(str))), True, date, '', '', ''
+    return count
 
 
-def to_bool(osm_file, field):
-    osm_file[field].loc[~osm_file[field].isnull()] = 1  # not nan
-    osm_file[field].loc[(osm_file[field].isnull()) | (osm_file[field] == 'no')] = 0  # not nan
-    return osm_file
-
-
-def gis_opers_for_all(file):
+def gis_opers_for_all(file, count_column):
     """
-    :param file: delete nan geometry and than reproject and clip files
+    :param count_column: group_by this column
+    :param file: delete nan geometry and than reprojected, clip and do it unidirectional
     :return: gdf
     """
-    return gpd.clip(file[~file.is_empty].dropna().to_crs(crs), clip_file, keep_geom_type=True)
+    print("gis_oper_for_all")
+    file = file[~file.is_empty]
+    clipped = gpd.clip(file.to_crs(crs), clip_file)
+    clipped = clipped[~clipped.is_empty]
+
+    # make it unidirectional grouping by "NO'(sum) and than drop_duplicates 'ON'
+    clipped.fillna(0, inplace=True)
+    group_by = clipped.groupby(['NO']).sum()
+    clipped.drop_duplicates(subset=['NO'], inplace=True)
+    clipped.set_index('NO', inplace=True)
+    clipped['count'] = group_by[count_column]
+    return clipped.reset_index()
 
 
 def osm_file_def():
-    if params['test']:
-        osm_file = gpd.read_file('shp_files/osm_road_network.shp', rows=10)
-
-    else:
-        osm_file = gpd.read_file('shp_files/osm_road_network.shp')
+    osm_file = gpd.read_file('shp_files/osm_road_network.shp')
 
     # drop duplicate
     osm_file.drop_duplicates(subset=['geometry'], inplace=True)
@@ -173,57 +170,71 @@ def osm_file_def():
     return osm_file
 
 
+def to_bool(osm_file, field):
+    osm_file[field].loc[~osm_file[field].isnull()] = 1  # not nan
+    osm_file[field].loc[(osm_file[field].isnull()) | (osm_file[field] == 'no')] = 0  # not nan
+    return osm_file
+
+
 if __name__ == '__main__':
+    # general code
     clip_file = gpd.read_file('shp_files/munich_3857.shp')
     crs = "EPSG:3857"
-    params = {'prepare_osm_data': False, 'incident': False, 'cycle_count': True, 'car_count': False, 'osm_file': False,
-              'test': False}
-    if params['prepare_osm_data']:
-        prepare_osm_data()
-
     date = pd.to_datetime("today")
     engine = create_engine('postgresql://research:1234@34.142.109.94:5432/walcycdata')
+
+    params = {'prepare_osm_data': False,
+              'count': [True, {'cycle_count': False, 'car_count': False, 'merge_files': True}],
+              'incident': False,
+              'osm_file': False, 'data_to_server': False}
+
+    if params['prepare_osm_data']:
+        prepare_osm_data()
+    if params['osm_file']:
+        print('create osm table')
+        my_osm_file = osm_file_def()
+        print('upload osm table')
+        my_osm_file.to_postgis(name="openstreetmap_road_network", con=engine, schema='production',
+                               if_exists='replace')
 
     if params['incident']:
         print('create incident table')
         my_incident = incident_def()
-        if params['test']:
-            print('incident csv table')
-            my_incident.set_index('walcycdata_id').to_csv('shp_files/new_shp_files/incident_data.csv')
-        else:
-            print('upload incident table')
-            my_incident.to_postgis(name="incident_data", con=engine, schema='production',
-                                   if_exists='replace')
+        print('upload incident table')
+        my_incident.to_postgis(name="incident_data", con=engine, schema='production',
+                               if_exists='replace')
+    if params['count'][0]:
+        local_params = params['count'][1]
 
-    if params['cycle_count']:
-        print('create cycle_count table')
-        my_cycle_count = cycle_count_def()
-        if params['test']:
-            print('csv cycle_count table')
-            my_cycle_count.set_index('walcycdata_id').to_csv('shp_files/new_shp_files/cycle_count_data.csv')
-        else:
-            print('upload cycle_count table')
-            my_cycle_count.set_index('walcycdata_id').to_csv('cycle_count_data.csv')
+        if local_params['cycle_count']:
+            print('create cycle_count table')
+            # upload files
+            cycle_count = gpd.read_file('shp_files/cycle_count_data.shp')
+            my_cycle_count = cycle_count_def(cycle_count)
+            my_cycle_count.to_file("shp_files/pr_data.gpkg", layer='cycle_count', driver="GPKG")
+            # print('upload cycle_count table')
             # my_cycle_count.to_postgis(name="cycle_count_data", con=engine, schema='production',
             #                           if_exists='replace')
 
-    if params['car_count']:
-        print('create car_count table')
-        my_car_count = car_count_def()
-        if params['test']:
-            print('csv car_count table')
-            my_car_count.set_index('walcycdata_id').to_csv('shp_files/new_shp_files/car_count_data.csv')
-        else:
-            print('upload cycle_count table')
-            my_car_count.to_postgis(name="car_count_data", con=engine, schema='production',
-                                    if_exists='replace')
-    if params['osm_file']:
-        print('create osm table')
-        my_osm_file = osm_file_def()
-        if params['test']:
-            print('osm csv table')
-            my_osm_file.set_index('walcycdata_id').to_csv('shp_files/new_shp_files/openStreetMap_road_network.csv')
-        else:
-            print('upload osm table')
-            my_osm_file.to_postgis(name="openstreetmap_road_network", con=engine, schema='production',
-                                   if_exists='replace')
+        if local_params['car_count']:
+            print('create car_count table')
+            car_count = gpd.read_file('shp_files/cars_count_data.shp')
+            my_car_count = car_count_def(car_count)
+            my_car_count.to_file("shp_files/pr_data.gpkg", layer='car_count', driver="GPKG")
+            # my_car_count.to_postgis(name="car_count_data", con=engine, schema='production',
+            #                         if_exists='replace')
+
+        if local_params['merge_files']:
+            cycle_count = gpd.read_file("shp_files/pr_data.gpkg", layer='cycle_count')
+            car_count = gpd.read_file("shp_files/pr_data.gpkg", layer='car_count')
+            all_count = cycle_count.merge(right=car_count, left_on='Cyclecount_id',
+                                          right_on='Carcount_id', how='outer', suffixes=('_cycle', '_car'))
+
+            all_count.loc[all_count['geometry_cycle'].isnull(), 'geometry_cycle'] = \
+                all_count[all_count['geometry_cycle'].isnull()]['geometry_car']
+            all_count = GeoDataFrame(all_count, geometry=all_count['geometry_cycle'], crs=car_count.crs)
+
+
+            all_count.drop(['geometry_car', 'geometry_cycle'], axis=1, inplace=True)
+            all_count.to_file("shp_files/pr_data.gpkg", layer='all_count', driver="GPKG")
+
