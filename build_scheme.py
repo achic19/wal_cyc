@@ -77,13 +77,27 @@ def incident_def():
     n = len(incident)
     incident['walcycdata_id'], incident['walcycdata_is_valid'], incident['walcycdata_last_modified'], incident[
         'osm_walcycdata_id'] = pd.Series(map(lambda x: int('1' + x), np.arange(n).astype(str))), True, date, ''
-    incident = gis_opers_for_all(incident)
+    incident = gis_opers_for_all(file=incident, unidirectional=False)
     return incident
+
+
+def join_to_bike_network(incidentgdb: GeoDataFrame, network: GeoDataFrame) -> GeoDataFrame:
+    """
+    Find for each incident the closet street segment (with bike 'NO')
+    :param incidentgdb:
+    :param network:
+    :return:
+    """
+
+    # remove from the network rows with Null values in 'Cyclecount_id'
+    network = GeoDataFrame(network[network['Cyclecount_id'].notna()]['Cyclecount_id'], geometry=network.geometry,
+                           crs=network.crs)
+    return gpd.sjoin_nearest(incidentgdb, network, how='left', distance_col='dist')
 
 
 def cycle_count_def(count):
     # project and clip
-    count = gis_opers_for_all(count, "ZAEHLUN~19")
+    count = gis_opers_for_all(file=count, count_column="ZAEHLUN~19", unidirectional=True)
     # change table names
     count.rename(
         columns={"NO": "Cyclecount_id", "count": "Cyclecount_count"}, inplace=True)
@@ -102,7 +116,7 @@ def cycle_count_def(count):
 
 def car_count_def(count):
     # project and clip
-    count = gis_opers_for_all(count, "ZOhlung_~7")
+    count = gis_opers_for_all(file=count, count_column="ZOhlung_~7", unidirectional=True)
     # change table names
     count.rename(
         columns={"NO": "Carcount_id", "count": "Carcount_count"}, inplace=True)
@@ -119,8 +133,9 @@ def car_count_def(count):
     return count
 
 
-def gis_opers_for_all(file, count_column):
+def gis_opers_for_all(file: GeoDataFrame, unidirectional: bool, count_column: str = '') -> GeoDataFrame:
     """
+    :param unidirectional: The code performs unidirectional operations if True
     :param count_column: group_by this column
     :param file: delete nan geometry and than reprojected, clip and do it unidirectional
     :return: gdf
@@ -129,14 +144,16 @@ def gis_opers_for_all(file, count_column):
     file = file[~file.is_empty]
     clipped = gpd.clip(file.to_crs(crs), clip_file)
     clipped = clipped[~clipped.is_empty]
-
-    # make it unidirectional grouping by "NO'(sum) and than drop_duplicates 'ON'
-    clipped.fillna(0, inplace=True)
-    group_by = clipped.groupby(['NO']).sum()
-    clipped.drop_duplicates(subset=['NO'], inplace=True)
-    clipped.set_index('NO', inplace=True)
-    clipped['count'] = group_by[count_column]
-    return clipped.reset_index()
+    if unidirectional:
+        # make it unidirectional grouping by "NO'(sum) and than drop_duplicates 'ON'
+        clipped.fillna(0, inplace=True)
+        group_by = clipped.groupby(['NO']).sum()
+        clipped.drop_duplicates(subset=['NO'], inplace=True)
+        clipped.set_index('NO', inplace=True)
+        clipped['count'] = group_by[count_column]
+        return clipped.reset_index()
+    else:
+        return clipped
 
 
 def osm_file_def():
@@ -146,14 +163,14 @@ def osm_file_def():
     osm_file.drop_duplicates(subset=['geometry'], inplace=True)
     # change table names
     osm_file.rename(
-        columns={"osmid": "osm_id", "highway": "osm_fclass", "name": "osm_name", "oneway": "osm_oneway",
+        columns={"osmid": "osm_id", "name": "osm_name", "oneway": "osm_oneway",
                  "maxspeed": "osm_maxspeed",
                  "layer": "osm_layer", "bridge": "osm_bridge", "tunnel": "osm_tunnel"}, inplace=True)
     # categorical values  - f_class
     cat_file = pd.read_csv('shp_files/cat.csv', header=None, names=['values', 'categories'])
-    osm_file = osm_file[osm_file["osm_fclass"].isin(cat_file['categories'])]
+    osm_file = osm_file[osm_file["highway"].isin(cat_file['categories'])]
     cat_file.set_index('categories', inplace=True)
-    osm_file["osm_fclass"] = cat_file.loc[osm_file["osm_fclass"]]['values'].values
+    osm_file["osm_fclass"] = cat_file.loc[osm_file["highway"]]['values'].values
 
     # null in layer = ground level = 0
 
@@ -164,7 +181,7 @@ def osm_file_def():
     # new fields, walcycdata_id = a unique number with leading 4 for osm
     n = len(osm_file)
     osm_file['walcycdata_id'], osm_file['walcycdata_is_valid'], osm_file['walcycdata_last_modified'] = pd.Series(
-        map(lambda x: '4' + x, np.arange(
+        map(lambda x: int('4' + x), np.arange(
             n).astype(str))), True, date
 
     return osm_file
@@ -183,26 +200,29 @@ if __name__ == '__main__':
     date = pd.to_datetime("today")
     engine = create_engine('postgresql://research:1234@34.142.109.94:5432/walcycdata')
 
-    params = {'prepare_osm_data': False,
-              'count': [True, {'cycle_count': False, 'car_count': False, 'merge_files': True}],
-              'incident': False,
-              'osm_file': False, 'data_to_server': False}
+    params = {'osm': [True, {'prepare_osm_data': False, 'osm_file': True, 'car_bike_osm': True}],
+              'count': [False,
+                        {'cycle_count': False, 'car_count': False, 'merge_files': False, 'delete_null_zero': True}],
+              'incident': [False, {'prepare_incident': False, 'join_to_bike_network': False}],
+              'count_osm': [True, {'bikes': False, 'cars': True}],
+              'data_to_server': False}
 
-    if params['prepare_osm_data']:
-        prepare_osm_data()
-    if params['osm_file']:
-        print('create osm table')
-        my_osm_file = osm_file_def()
-        print('upload osm table')
-        my_osm_file.to_postgis(name="openstreetmap_road_network", con=engine, schema='production',
-                               if_exists='replace')
-
-    if params['incident']:
-        print('create incident table')
-        my_incident = incident_def()
-        print('upload incident table')
-        my_incident.to_postgis(name="incident_data", con=engine, schema='production',
-                               if_exists='replace')
+    if params['osm'][0]:
+        local_params = params['osm'][1]
+        if local_params['prepare_osm_data']:
+            prepare_osm_data()
+        if local_params['osm_file']:
+            print('create osm table')
+            my_osm_file = osm_file_def()
+            my_osm_file.to_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network', driver="GPKG")
+        # my_osm_file.to_postgis(name="openstreetmap_road_network", con=engine, schema='production',
+        #                        if_exists='replace')
+        if local_params['car_bike_osm']:
+            osm_file = gpd.read_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network')
+            bike_osm = osm_file.set_index('highway').drop(labels=['footway', 'steps'], axis=0)
+            car_osm = bike_osm.drop(labels=['cycleway', 'bridleway'], axis=0)
+            bike_osm.reset_index().to_file("shp_files/pr_data.gpkg", layer='cycle_osm', driver="GPKG")
+            car_osm.reset_index().to_file("shp_files/pr_data.gpkg", layer='car_osm', driver="GPKG")
     if params['count'][0]:
         local_params = params['count'][1]
 
@@ -212,6 +232,7 @@ if __name__ == '__main__':
             cycle_count = gpd.read_file('shp_files/cycle_count_data.shp')
             my_cycle_count = cycle_count_def(cycle_count)
             my_cycle_count.to_file("shp_files/pr_data.gpkg", layer='cycle_count', driver="GPKG")
+
             # print('upload cycle_count table')
             # my_cycle_count.to_postgis(name="cycle_count_data", con=engine, schema='production',
             #                           if_exists='replace')
@@ -234,7 +255,33 @@ if __name__ == '__main__':
                 all_count[all_count['geometry_cycle'].isnull()]['geometry_car']
             all_count = GeoDataFrame(all_count, geometry=all_count['geometry_cycle'], crs=car_count.crs)
 
-
             all_count.drop(['geometry_car', 'geometry_cycle'], axis=1, inplace=True)
             all_count.to_file("shp_files/pr_data.gpkg", layer='all_count', driver="GPKG")
+        if local_params['delete_null_zero']:
+            all_count = gpd.read_file("shp_files/pr_data.gpkg", layer='all_count')
+            all_count[['Cyclecount_count', 'Carcount_count']] = all_count[
+                ['Cyclecount_count', 'Carcount_count']].fillna(0)
+            all_count = all_count[(all_count['Cyclecount_count'] != 0) | (all_count['Carcount_count'] != 0)]
+            all_count.to_file("shp_files/pr_data.gpkg", layer='all_count_no_zero', driver="GPKG")
+
+    if params['incident'][0]:
+        print('work on incident data')
+        local_params = params['incident'][1]
+        if local_params['prepare_incident']:
+            my_incident = incident_def()
+            my_incident.to_file("shp_files/pr_data.gpkg", layer='incident', driver="GPKG")
+        if local_params['join_to_bike_network']:
+            print('join_to_bike_network')
+            my_incident = gpd.read_file("shp_files/pr_data.gpkg", layer='incident')
+            all_count = gpd.read_file("shp_files/pr_data.gpkg", layer='all_count')
+            my_incident = join_to_bike_network(my_incident, all_count)
+            my_incident.to_file("shp_files/pr_data.gpkg", layer='incident_with_street_id', driver="GPKG")
+        # my_incident.to_postgis(name="incident_data", con=engine, schema='production',
+        #                        if_exists='replace')
+    if params['count_osm'][0]:
+        local_params = params['count_osm'][1]
+        count_data = gpd.read_file("shp_files/pr_data.gpkg", layer='all_count_no_zero')
+        if local_params['cars']:
+            osm_data = gpd.read_file("shp_files/pr_data.gpkg", layer='car_osm')
+            count_data_cars = count_data[count_data['Carcount_count']>0]
 
