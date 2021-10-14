@@ -30,7 +30,7 @@ def prepare_osm_data():
     ox.utils.config(useful_tags_way=useful_tags_path)
     # download data from OSM based on polygon boundaries
     area = gpd.read_file(r'shp_files\munich_4326.shp')['geometry'][0]
-    graph = ox.graph_from_polygon(area, network_type='all')
+    graph = ox.graph_from_polygon(area, network_type='all', clean_periphery=False)
     # project to espg:3857 ,create undirected and create gdf
     graph_pr = ox.project_graph(graph)
     graph_pr = graph_pr.to_undirected()
@@ -44,7 +44,46 @@ def prepare_osm_data():
     columns.append('geometry')
     edges_shp = edges_new.loc[:, columns]
     print('to shape_file')
-    edges_shp.to_crs(epsg=3857).to_file(r'shp_files\osm_road_network.shp')
+    edges_shp.to_crs(epsg=3857).to_file(r'shp_files\osm_road_network2.shp')
+
+
+def osm_file_def():
+    osm_df = gpd.read_file('shp_files/osm_road_network.shp')
+
+    # drop duplicate
+    osm_df.drop_duplicates(subset=['geometry'], inplace=True)
+    # change table names
+    osm_df.rename(
+        columns={"osmid": "osm_id", "name": "osm_name", "oneway": "osm_oneway",
+                 "maxspeed": "osm_maxspeed",
+                 "layer": "osm_layer", "bridge": "osm_bridge", "tunnel": "osm_tunnel"}, inplace=True)
+    # categorical values  - f_class
+    cat_file = pd.read_csv('shp_files/cat.csv', header=None, names=['values', 'categories'])
+    osm_df = osm_df[osm_df["highway"].isin(cat_file['categories'])]
+    cat_file.set_index('categories', inplace=True)
+    osm_df["osm_fclass"] = cat_file.loc[osm_df["highway"]]['values'].values
+
+    # null in layer = ground level = 0
+
+    osm_df["osm_layer"].fillna(0, inplace=True)
+    # bool values  -bridge,tunnel
+    osm_df = to_bool(osm_df, 'osm_bridge')
+    osm_df = to_bool(osm_df, 'osm_tunnel')
+
+    # new fields, walcycdata_id = a unique number with leading 4 for osm
+    osm_df.reset_index(inplace=True)
+    n = len(osm_df)
+    osm_df['walcycdata_id'], osm_df['walcycdata_is_valid'], osm_df['walcycdata_last_modified'] = pd.Series(
+        map(lambda x: int('4' + x), np.arange(
+            n).astype(str))), True, date
+
+    return osm_df
+
+
+def to_bool(osm_df, field):
+    osm_df[field].loc[~osm_df[field].isnull()] = 1  # not nan
+    osm_df[field].loc[(osm_df[field].isnull()) | (osm_df[field] == 'no')] = 0  # not nan
+    return osm_df
 
 
 def incident_def():
@@ -74,17 +113,18 @@ def incident_def():
         columns=['Municipali', 'severity'], inplace=True)
 
     # new fields, , walcycdata_id = a unique number with leading 1 for incidents
+    incident.reset_index(inplace=True)
     n = len(incident)
     incident['walcycdata_id'], incident['walcycdata_is_valid'], incident['walcycdata_last_modified'], incident[
         'osm_walcycdata_id'] = pd.Series(map(lambda x: int('1' + x), np.arange(n).astype(str))), True, date, ''
-    incident = gis_opers_for_all(file=incident, unidirectional=False)
+    incident = general_tasks(file=incident, unidirectional=False)
     return incident
 
 
-def join_to_bike_network(incidentgdb: GeoDataFrame, network: GeoDataFrame) -> GeoDataFrame:
+def join_to_bike_network(incident_gdb: GeoDataFrame, network: GeoDataFrame) -> GeoDataFrame:
     """
     Find for each incident the closet street segment (with bike 'NO')
-    :param incidentgdb:
+    :param incident_gdb:
     :param network:
     :return:
     """
@@ -92,12 +132,12 @@ def join_to_bike_network(incidentgdb: GeoDataFrame, network: GeoDataFrame) -> Ge
     # remove from the network rows with Null values in 'Cyclecount_id'
     network = GeoDataFrame(network[network['Cyclecount_id'].notna()]['Cyclecount_id'], geometry=network.geometry,
                            crs=network.crs)
-    return gpd.sjoin_nearest(incidentgdb, network, how='left', distance_col='dist')
+    return gpd.sjoin_nearest(incident_gdb, network, how='left', distance_col='dist')
 
 
 def cycle_count_def(count):
     # project and clip
-    count = gis_opers_for_all(file=count, count_column="ZAEHLUN~19", unidirectional=True)
+    count = general_tasks(file=count, count_column="ZAEHLUN~19", unidirectional=True)
     # change table names
     count.rename(
         columns={"NO": "Cyclecount_id", "count": "Cyclecount_count"}, inplace=True)
@@ -106,6 +146,7 @@ def cycle_count_def(count):
     count = count[['Cyclecount_id', 'Cyclecount_count', 'geometry']]
 
     # new fields, walcycdata_id = a unique number with leading 2 for cycle count
+    count.reset_index(inplace=True)
     n = len(count)
     count['walcycdata_id'] = pd.Series(map(lambda x: int('2' + x), np.arange(n).astype(str)))
     count['walcycdata_is_valid'], count['walcycdata_last_modified'], \
@@ -116,7 +157,7 @@ def cycle_count_def(count):
 
 def car_count_def(count):
     # project and clip
-    count = gis_opers_for_all(file=count, count_column="ZOhlung_~7", unidirectional=True)
+    count = general_tasks(file=count, count_column="ZOhlung_~7", unidirectional=True)
     # change table names
     count.rename(
         columns={"NO": "Carcount_id", "count": "Carcount_count"}, inplace=True)
@@ -125,6 +166,7 @@ def car_count_def(count):
     count = count[['Carcount_id', 'Carcount_count', 'geometry']]
 
     # new fields, walcycdata_id = a unique number with leading 3 for cycle count
+    count.reset_index(inplace=True)
     n = len(count)
     count['walcycdata_id'], count['walcycdata_is_valid'], count['walcycdata_last_modified'], \
     count['osm_walcycdata_id'], count['Carcount_timestamp_start'], count[
@@ -133,7 +175,7 @@ def car_count_def(count):
     return count
 
 
-def gis_opers_for_all(file: GeoDataFrame, unidirectional: bool, count_column: str = '') -> GeoDataFrame:
+def general_tasks(file: GeoDataFrame, unidirectional: bool, count_column: str = '') -> GeoDataFrame:
     """
     :param unidirectional: The code performs unidirectional operations if True
     :param count_column: group_by this column
@@ -156,43 +198,6 @@ def gis_opers_for_all(file: GeoDataFrame, unidirectional: bool, count_column: st
         return clipped
 
 
-def osm_file_def():
-    osm_file = gpd.read_file('shp_files/osm_road_network.shp')
-
-    # drop duplicate
-    osm_file.drop_duplicates(subset=['geometry'], inplace=True)
-    # change table names
-    osm_file.rename(
-        columns={"osmid": "osm_id", "name": "osm_name", "oneway": "osm_oneway",
-                 "maxspeed": "osm_maxspeed",
-                 "layer": "osm_layer", "bridge": "osm_bridge", "tunnel": "osm_tunnel"}, inplace=True)
-    # categorical values  - f_class
-    cat_file = pd.read_csv('shp_files/cat.csv', header=None, names=['values', 'categories'])
-    osm_file = osm_file[osm_file["highway"].isin(cat_file['categories'])]
-    cat_file.set_index('categories', inplace=True)
-    osm_file["osm_fclass"] = cat_file.loc[osm_file["highway"]]['values'].values
-
-    # null in layer = ground level = 0
-
-    osm_file["osm_layer"].fillna(0, inplace=True)
-    # bool values  -bridge,tunnel
-    osm_file = to_bool(osm_file, 'osm_bridge')
-    osm_file = to_bool(osm_file, 'osm_tunnel')
-    # new fields, walcycdata_id = a unique number with leading 4 for osm
-    n = len(osm_file)
-    osm_file['walcycdata_id'], osm_file['walcycdata_is_valid'], osm_file['walcycdata_last_modified'] = pd.Series(
-        map(lambda x: int('4' + x), np.arange(
-            n).astype(str))), True, date
-
-    return osm_file
-
-
-def to_bool(osm_file, field):
-    osm_file[field].loc[~osm_file[field].isnull()] = 1  # not nan
-    osm_file[field].loc[(osm_file[field].isnull()) | (osm_file[field] == 'no')] = 0  # not nan
-    return osm_file
-
-
 if __name__ == '__main__':
     # general code
     clip_file = gpd.read_file('shp_files/munich_3857.shp')
@@ -202,9 +207,9 @@ if __name__ == '__main__':
 
     params = {'osm': [True, {'prepare_osm_data': False, 'osm_file': True, 'car_bike_osm': True}],
               'count': [False,
-                        {'cycle_count': False, 'car_count': False, 'merge_files': False, 'delete_null_zero': True}],
+                        {'cycle_count': False, 'car_count': False, 'merge_files': False, 'delete_null_zero': False}],
               'incident': [False, {'prepare_incident': False, 'join_to_bike_network': False}],
-              'count_osm': [True, {'bikes': False, 'cars': True}],
+              'count_osm': [True, {'bikes': True, 'cars': True}],
               'data_to_server': False}
 
     if params['osm'][0]:
@@ -283,5 +288,24 @@ if __name__ == '__main__':
         count_data = gpd.read_file("shp_files/pr_data.gpkg", layer='all_count_no_zero')
         if local_params['cars']:
             osm_data = gpd.read_file("shp_files/pr_data.gpkg", layer='car_osm')
-            count_data_cars = count_data[count_data['Carcount_count']>0]
+            count_data_cars = count_data[count_data['Carcount_count'] > 0]
+            network = GeoDataFrame(osm_data[['osm_id', 'walcycdata_id']], geometry=osm_data.geometry, crs=osm_data.crs)
+            cars_bike_join = gpd.sjoin_nearest(count_data_cars, network, how='left', distance_col='dist')
+            cars_bike_join.to_file("shp_files/pr_data.gpkg", layer='cars_bike_join', driver="GPKG")
 
+            #  To evaluate the results the code store
+            # a seperate layer with entities found to be closed to count entities
+            cars_bikes_osm = osm_data[osm_data['walcycdata_id'].isin(cars_bike_join['walcycdata_id'].unique())]
+            cars_bikes_osm.to_file("shp_files/pr_data.gpkg", layer='cars_bikes_osm_join', driver="GPKG")
+
+        if local_params['bikes']:
+            osm_data = gpd.read_file("shp_files/pr_data.gpkg", layer='cycle_osm')
+            count_data_cycle = count_data[count_data['Cyclecount_count'] > 0]
+            network = GeoDataFrame(osm_data[['osm_id', 'walcycdata_id']], geometry=osm_data.geometry, crs=osm_data.crs)
+            bike_join = gpd.sjoin_nearest(count_data_cycle, network, how='left', distance_col='dist')
+            bike_join.to_file("shp_files/pr_data.gpkg", layer='bike_join', driver="GPKG")
+
+            #  To evaluate the results the code store
+            # a seperate layer with entities found to be closed to count entities
+            bikes_osm = osm_data[osm_data['walcycdata_id'].isin(bike_join['walcycdata_id'].unique())]
+            bikes_osm.to_file("shp_files/pr_data.gpkg", layer='bikes_osm_join', driver="GPKG")
