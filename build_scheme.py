@@ -5,6 +5,8 @@ from sqlalchemy import create_engine
 import networkx as nx
 import osmnx as ox
 from geopandas import GeoDataFrame
+from shapely.coords import CoordinateSequence
+import math
 
 
 def list_to_str(row, columns):
@@ -90,20 +92,47 @@ def to_bool(osm_df, field):
 
 def clear_footway_near_other_elements(osm_network: GeoDataFrame):
     """
-    When the footway is around other elements, remove them for later use.
+    When the footway is around other elements, remove them for later use based on two conditions: 1. they are at the
+    same level and they quite parallel
     :return:
     """
     footway = osm_network.loc['footway'].set_index('walcycdata_id')
-    roads = osm_network.drop(labels=['footway'], axis=0)
+    roads = osm_network.drop(labels=['footway', 'path', 'service'], axis=0).set_index('walcycdata_id')
     buffer = gpd.GeoDataFrame(footway[['osm_bridge', 'osm_tunnel']], crs=osm_network.crs,
                               geometry=footway.geometry.buffer(20, cap_style=2))
-    footway_with_roads = buffer.sjoin(roads, how='inner', predicate='intersects')
+    # For evaluation only
+    buffer.to_file("shp_files/pr_data.gpkg", layer='buffer_footway', driver="GPKG")
+    footway_with_roads = buffer.reset_index().sjoin(roads, how='inner', predicate='crosses')
+    footway_with_roads_contains = buffer.reset_index().sjoin(roads, how='inner', predicate='contains')
+    footway_with_roads = footway_with_roads.append(footway_with_roads_contains)
     footway_with_roads_same_level = footway_with_roads[
         (footway_with_roads['osm_tunnel_left'] == footway_with_roads['osm_tunnel_right']) & (
-                    footway_with_roads['osm_bridge_left'] == footway_with_roads['osm_bridge_right'])]
+                footway_with_roads['osm_bridge_left'] == footway_with_roads['osm_bridge_right'])]
+    footway_with_roads_same_level['is_parallel'] = footway_with_roads_same_level.apply(
+        lambda x: is_parallel(footway.loc[x['walcycdata_id']].geometry.coords,
+                              roads.loc[x['index_right']].geometry.coords
+                              ), axis=1)
+    footway_with_roads_same_level = footway_with_roads_same_level[footway_with_roads_same_level['is_parallel']]
+    return osm_network[~osm_network['walcycdata_id'].isin(footway_with_roads_same_level['walcycdata_id'].unique())]
 
-    return osm_network[~osm_network['walcycdata_id'].isin(footway_with_roads.index.unique())]
 
+def is_parallel(geo_1: CoordinateSequence, geo_2: CoordinateSequence):
+    """
+    This function check whether two geometries are parallel (with a tolerance of 20 degrees)
+    :param geo_1:
+    :param geo_2:
+    :return:
+    """
+    azimuth_list = []
+    for geo in [geo_1, geo_2]:
+        azimuth = math.degrees(math.atan2(geo[-1][0] - geo[0][0], geo[-1][1] - geo[0][1]))
+        if azimuth < 0:
+            azimuth += 360
+        azimuth_list.append(azimuth)
+    if (abs(azimuth_list[1] - azimuth_list[0]) < 15) or (abs((abs(azimuth_list[1] - azimuth_list[0]) - 180)) < 15):
+        return True
+    else:
+        return False
 
 
 def incident_def():
@@ -218,6 +247,29 @@ def general_tasks(file: GeoDataFrame, unidirectional: bool, count_column: str = 
         return clipped
 
 
+def count_osm(osm_gdf: GeoDataFrame, is_cycle: int, name_id):
+    """
+    This function matches the count data with corresponding OSM entities.
+    :param osm_gdf: The OSM network to work on
+    :param is_cycle: Based on this bool, we sort the relevant information from count data
+    1:only bikes 2:only cars 3:bikes and cars
+    :param name_id: This will allow us to  identify the id to whom the osm entity will be linked
+    :return:
+    """
+    if is_cycle == 1:
+        count_data_local = count_data[count_data['Carcount_count'] == 0]
+    elif is_cycle == 2:
+        count_data_local = count_data[count_data['Cyclecount_count'] == 0]
+    else:
+        count_data_local = count_data[(count_data['Cyclecount_count'] > 0) & (count_data['Carcount_count'] > 0)]
+
+    network = GeoDataFrame(osm_gdf[['osm_id', 'walcycdata_id']],
+                           geometry=osm_gdf.geometry.buffer(10, cap_style=2), crs=osm_gdf.crs)
+    buffer_count = gpd.GeoDataFrame(count_data_local[[name_id]], crs=count_data_local.crs,
+                                    geometry=count_data_local.geometry.buffer(10, cap_style=2))
+    res_inter = buffer_count.overlay(network, how='intersection')
+
+
 if __name__ == '__main__':
     # general code
     clip_file = gpd.read_file('shp_files/munich_3857.shp')
@@ -225,11 +277,11 @@ if __name__ == '__main__':
     date = pd.to_datetime("today")
     engine = create_engine('postgresql://research:1234@34.142.109.94:5432/walcycdata')
 
-    params = {'osm': [True, {'prepare_osm_data': False, 'osm_file': False, 'car_bike_osm': True}],
+    params = {'osm': [False, {'prepare_osm_data': False, 'osm_file': False, 'car_bike_osm': True}],
               'count': [False,
                         {'cycle_count': False, 'car_count': False, 'merge_files': False, 'delete_null_zero': False}],
               'incident': [False, {'prepare_incident': False, 'join_to_bike_network': False}],
-              'count_osm': [False, {'bikes': True, 'cars': False}],
+              'count_osm': [True, {'bikes': True, 'cars': False, 'bikes and car': False}],
               'data_to_server': False}
 
     if params['osm'][0]:
@@ -248,7 +300,7 @@ if __name__ == '__main__':
             bike_osm = osm_file.set_index('highway').drop(labels=['steps'], axis=0)
             bike_osm = clear_footway_near_other_elements(bike_osm)
             car_osm = bike_osm.drop(labels=['footway', 'cycleway', 'bridleway'], axis=0)
-            bike_osm.reset_index().to_file("shp_files/pr_data.gpkg", layer='cycle_osm', driver="GPKG")
+            bike_osm.to_file("shp_files/pr_data.gpkg", layer='cycle_osm', driver="GPKG")
             car_osm.reset_index().to_file("shp_files/pr_data.gpkg", layer='car_osm', driver="GPKG")
     if params['count'][0]:
         local_params = params['count'][1]
@@ -308,30 +360,33 @@ if __name__ == '__main__':
     if params['count_osm'][0]:
         local_params = params['count_osm'][1]
         count_data = gpd.read_file("shp_files/pr_data.gpkg", layer='all_count_no_zero')
-        if local_params['cars']:
-            print('join  cars count data to OSM network')
-            osm_data = gpd.read_file("shp_files/pr_data.gpkg", layer='car_osm')
-            # this includes all entities that could be cars or bikes
-            count_data_cars = count_data[count_data['Carcount_count'] > 0]
-            network = GeoDataFrame(osm_data[['osm_id', 'walcycdata_id']], geometry=osm_data.geometry, crs=osm_data.crs)
-            cars_bike_join = gpd.sjoin_nearest(count_data_cars, network, how='left', distance_col='dist')
-            cars_bike_join.to_file("shp_files/pr_data.gpkg", layer='cars_bike_join', driver="GPKG")
-
-            #  To evaluate the results the code store
-            # a seperate layer with entities found to be closed to count entities
-            cars_bikes_osm = osm_data[osm_data['walcycdata_id'].isin(cars_bike_join['walcycdata_id'].unique())]
-            cars_bikes_osm.to_file("shp_files/pr_data.gpkg", layer='cars_bikes_osm_join', driver="GPKG")
 
         if local_params['bikes']:
             print('join bikes count data to OSM network')
             osm_data = gpd.read_file("shp_files/pr_data.gpkg", layer='cycle_osm')
+            count_osm(osm_data, 1, 'Cyclecount_id')
             # this includes only bikes users
-            count_data_cycle = count_data[count_data['Carcount_count'] == 0]
-            network = GeoDataFrame(osm_data[['osm_id', 'walcycdata_id']], geometry=osm_data.geometry, crs=osm_data.crs)
-            bike_join = gpd.sjoin_nearest(count_data_cycle, network, how='left', distance_col='dist')
-            bike_join.to_file("shp_files/pr_data.gpkg", layer='bike_join', driver="GPKG")
+
+            # bike_join.to_file("shp_files/pr_data.gpkg", layer='bike_join', driver="GPKG")
 
             #  To evaluate the results the code store
             # a seperate layer with entities found to be closed to count entities
-            bikes_osm = osm_data[osm_data['walcycdata_id'].isin(bike_join['walcycdata_id'].unique())]
-            bikes_osm.to_file("shp_files/pr_data.gpkg", layer='bikes_osm_join', driver="GPKG")
+            # bikes_osm = osm_data[osm_data['walcycdata_id'].isin(bike_join['walcycdata_id'].unique())]
+            # bikes_osm.to_file("shp_files/pr_data.gpkg", layer='bikes_osm_join', driver="GPKG")
+
+        if local_params['cars']:
+            print('join  cars count data to OSM network')
+            osm_data = gpd.read_file("shp_files/pr_data.gpkg", layer='car_osm')
+            count_osm(osm_data, 2, 'Carcount_id')
+
+            # cars_bike_join.to_file("shp_files/pr_data.gpkg", layer='cars_bike_join', driver="GPKG")
+
+            #  To evaluate the results the code store
+            # a seperate layer with entities found to be closed to count entities
+            # cars_bikes_osm = osm_data[osm_data['walcycdata_id'].isin(cars_bike_join['walcycdata_id'].unique())]
+            # cars_bikes_osm.to_file("shp_files/pr_data.gpkg", layer='cars_bikes_osm_join', driver="GPKG")
+
+        if local_params['bikes and car']:
+            print('join  data with bikes and cars count to OSM network')
+            osm_data = gpd.read_file("shp_files/pr_data.gpkg", layer='car_osm')
+            count_osm(osm_data, 3, 'Cyclecount_id')
