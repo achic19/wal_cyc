@@ -4,7 +4,7 @@ import pandas as pd
 from sqlalchemy import create_engine
 import networkx as nx
 import osmnx as ox
-from geopandas import GeoDataFrame, GeoSeries
+from geopandas import GeoDataFrame
 from shapely.coords import CoordinateSequence
 import math
 
@@ -60,11 +60,10 @@ def osm_file_def():
                  "maxspeed": "osm_maxspeed",
                  "layer": "osm_layer", "bridge": "osm_bridge", "tunnel": "osm_tunnel"}, inplace=True)
     # categorical values  - f_class
-    cat_file = pd.read_csv('shp_files/cat.csv')
+    cat_file = pd.read_csv('shp_files/cat.csv', header=None, names=['values', 'categories'])
     osm_df = osm_df[osm_df["highway"].isin(cat_file['categories'])]
     cat_file.set_index('categories', inplace=True)
     osm_df["osm_fclass"] = cat_file.loc[osm_df["highway"]]['values'].values
-    osm_df["osm_fclass_hir"] = cat_file.loc[osm_df["highway"]]['hierarchical values'].values
 
     # bool values  -bridge,tunnel
     osm_df = to_bool(osm_df, 'osm_bridge')
@@ -209,7 +208,7 @@ def cycle_count_def(count):
     count['walcycdata_id'] = pd.Series(map(lambda x: int('2' + x), np.arange(n).astype(str)))
     count['walcycdata_is_valid'], count['walcycdata_last_modified'], \
     count['osm_walcycdata_id'], count['cyclecount_timestamp_start'], count[
-        'cyclecount_timestamp_end'] = 1, date, -1, -1, -1
+        'cyclecount_timestamp_end'] = 1, date, -1, '', ''
     count.set_index('walcycdata_id', inplace=True)
     return count.drop('index', axis=1)
 
@@ -230,7 +229,7 @@ def car_count_def(count):
     count['walcycdata_id'], count['walcycdata_is_valid'], count['walcycdata_last_modified'], \
     count['osm_walcycdata_id'], count['carcount_timestamp_start'], count[
         'carcount_timestamp_end'] = pd.Series(
-        map(lambda x: int('3' + x), np.arange(n).astype(str))), 1, date, -1, -1, -1
+        map(lambda x: int('3' + x), np.arange(n).astype(str))), 1, date, -1, '', ''
     count.set_index('walcycdata_id', inplace=True)
     return count.drop('index', axis=1)
 
@@ -258,8 +257,6 @@ def remove_type(value):
     :param value:
     :return:
     """
-    if value == 'R,U':
-        return False
     if value is None:
         return True
     row_split = value.split(',')
@@ -269,95 +266,38 @@ def remove_type(value):
     return False
 
 
-def overlay_count_osm(osm_gdf_0: GeoDataFrame, local_network: GeoDataFrame, osm_columns: list,
-                      local_columns: list, dissolve_by: str) -> dict:
+def count_osm(osm_gdf: GeoDataFrame, local_network: GeoDataFrame, osm_columns: list, local_columns: list):
     """
-    This function calculate between osm entities and local network entities
-    :param osm_gdf_0: The OSM network to work on
+    This function matches the count data with corresponding OSM entities.
+    :param osm_gdf: The OSM network to work on
     :param local_network: count data on local network
     :param local_columns: fields of local network to save while the matching process
     :param osm_columns: fields of osm network to save while the matching process
-    :return: list of all the gis files been created during implementation of this stage
-    :param dissolve_by: before buffering, the code dissolve osm entities by that field
+    :return:
     """
 
     # make buffer of 10 meters around each polyline in the both dataframes
     # and calculate the overlay intersection between the two.
-    print('osm_dissolve')
-    osm_gdf = osm_gdf_0.dissolve(by=dissolve_by).reset_index()
-    print('osm_buffer')
     osm_buffer = GeoDataFrame(osm_gdf[osm_columns],
-                              geometry=osm_gdf.geometry.buffer(15, cap_style=2), crs=osm_gdf.crs)
-    print('count_buffer')
+                              geometry=osm_gdf.geometry.buffer(10, cap_style=2), crs=osm_gdf.crs)
     count_buffer = gpd.GeoDataFrame(local_network[local_columns], crs=local_network.crs,
-                                    geometry=local_network.geometry.buffer(15, cap_style=2))
-    print('overlay')
-    overlay = count_buffer.overlay(osm_buffer, how='intersection')
-    overlay['areas'] = overlay.area
-    # TODo change the index to index column and check line 298
-    overlay['percentage'] = overlay['areas'] / count_buffer.area * 100
-    return {'overlay': overlay, 'osm_buffer': osm_buffer,
-            'count_buffer': count_buffer, 'osm_gdf': osm_gdf}
-
-
-def map_matching(overlay: GeoDataFrame, file_count_to_update: GeoDataFrame, groupby_field: str) -> GeoDataFrame:
-    """
-    map between the local network to the osm network based on the largest overlay between two entities
-    :param overlay: polygons of overlay
-    :param file_count_to_update:
-    :param groupby_field:
-    :return:
-    """
-    print('start map matching')
+                                    geometry=local_network.geometry.buffer(10, cap_style=2))
+    res_inter = count_buffer.overlay(osm_buffer, how='intersection')
+    pass
     # for each count object return the osm id with the larger overlay with him
-    matching_info = overlay.groupby(groupby_field).apply(lambda x: x[x.area == x.area.max()].iloc[0])
-    # update cycle count data with the corresponding osm id
+    # matching_info = res_inter.groupby(name_id).apply(
+    #     lambda x: x[x.area == x.area.max()][['osm_id', 'walcycdata_id']].iloc[0])
+    # # update cycle count data with the corresponding osm id
     # matching_info.index = matching_info.index.astype('int64')
-    matching_info.sort_index(inplace=True)
+    # matching_info.sort_index(inplace=True)
 
-    file_count_to_update.set_index(groupby_field, drop=False, inplace=True)
-    file_count_to_update.sort_index(inplace=True)
-    file_count_to_update['osm_walcycdata_id'] = -1
-    file_count_to_update['osm_walcycdata_id'][
-        file_count_to_update[groupby_field].isin(matching_info.index)] = matching_info['osm_id']
-    file_count_to_update.drop('index', axis=1, inplace=True)
-    print('finish map matching')
-    return file_count_to_update
-
-
-def find_optimal_applicant(group):
-    """
-    By analyzing several conditions, this function finds the best candidates out of all the options:
-    1. The highest in the hierarchy should be the first ti check
-    2. Then these with the largest overlay should be chosen
-    3. Select the applicant if he meets the parallel condition and the minimum overlay
-    :param group: group of applicants (osm entities)
-    :return:
-    """
-    if len(group) > 1:
-        group.sort_values(['areas', 'osm_fclass_hir'], ascending=False, inplace=True)
-        for row in group:
-            if is_parallel_more_than_min(row):
-                return row
-    else:
-        row = group.iloc[0]
-        if is_parallel_more_than_min(row):
-            return row
-
-    # lambda x: x[x.area == x.area.max()].iloc[0]
-
-
-def is_parallel_more_than_min(row) -> bool:
-    """
-   Using this function you can check if the lines have more or less of the same direction and
-   if the overlap between their polygons is more than 20%
-    :param row:
-    :return:
-    """
-    if row['parallel'] < 30 and row['percentage'] > 20:
-        return True
-    else:
-        return False
+    # file_count_to_update.set_index(name_id, drop=False, inplace=True)
+    # file_count_to_update.sort_index(inplace=True)
+    #
+    # file_count_to_update['osm_walcycdata_id'][
+    #     file_count_to_update[name_id].isin(matching_info.index)] = matching_info['osm_id']
+    # file_to_updated.drop([name_id], axis=1, inplace=True)
+    # return file_count_to_update
 
 
 if __name__ == '__main__':
@@ -365,14 +305,14 @@ if __name__ == '__main__':
     clip_file = gpd.read_file('shp_files/munich_3857.shp')
     crs = "EPSG:3857"
     date = pd.to_datetime("today")
-    type_to_remove = ['C', 'D', 'NT', 'S', 'T', 'U']
+    type_to_remove = ['C', 'D', 'NT', 'S', 'T']
     engine = create_engine('postgresql://research:1234@34.142.109.94:5432/walcycdata')
 
     params = {'osm': [False, {'prepare_osm_data': False, 'osm_file': True, 'car_bike_osm': False}],
               'count': [False,
                         {'cycle_count': False, 'car_count': False, 'merge_files': True, 'delete_null_zero': False}],
               'incident': [False, {'prepare_incident': True, 'join_to_bike_network': False}],
-              'count_osm': [True, {'prepare_overlay': True, 'matching': True}],
+              'count_osm': True,
               'data_to_server': [False, {'osm': False, 'bikes': True, 'cars': True, 'incidents': False}]}
 
     if params['osm'][0]:
@@ -410,20 +350,14 @@ if __name__ == '__main__':
 
         if local_params['merge_files']:
             print('merge file')
-            cycle_count = gpd.read_file("shp_files/pr_data.gpkg", layer='cycle_count')[
-                ['walcycdata_id', 'cyclecount_id', 'cyclecount_count', 'geometry']]
-            car_count = gpd.read_file("shp_files/pr_data.gpkg", layer='car_count')[
-                ['walcycdata_id', 'carcount_id', 'carcount_count', 'geometry']]
-
-            cycle_count.drop_duplicates(subset=['cyclecount_id'], inplace=True)
-            car_count.drop_duplicates(subset=['carcount_id'], inplace=True)
-
+            cycle_count = gpd.read_file("shp_files/pr_data.gpkg", layer='cycle_count')
+            car_count = gpd.read_file("shp_files/pr_data.gpkg", layer='car_count')
             all_count = cycle_count.merge(right=car_count, left_on='cyclecount_id',
                                           right_on='carcount_id', how='outer', suffixes=('_cycle', '_car'))
             # 'geometry_cycle' will be the geometry for all the the entities in the new file
             all_count.loc[all_count['geometry_cycle'].isnull(), 'geometry_cycle'] = \
                 all_count[all_count['geometry_cycle'].isnull()]['geometry_car']
-            all_count = GeoDataFrame(all_count, geometry=all_count['geometry_cycle'], crs=crs)
+            all_count = GeoDataFrame(all_count, geometry=all_count['geometry_cycle'], crs=car_count.crs)
 
             all_count.drop(['geometry_car', 'geometry_cycle'], axis=1, inplace=True)
             all_count.reset_index().to_file("shp_files/pr_data.gpkg", layer='all_count', driver="GPKG")
@@ -447,23 +381,12 @@ if __name__ == '__main__':
             my_incident = join_to_bike_network(my_incident, all_count)
             my_incident.to_file("shp_files/pr_data.gpkg", layer='incident_with_street_id', driver="GPKG")
 
-    if params['count_osm'][0]:
-        local_params = params['count_osm'][1]
+    if params['count_osm']:
         count_data = gpd.read_file("shp_files/pr_data.gpkg", layer='all_count')
-        if local_params['prepare_overlay']:
-            print(' start overlay')
-            osm_data = gpd.read_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network')
-            osm_data_columns = ['osm_id', 'highway', 'osm_fclass_hir']
-            count_columns = ['index', 'walcycdata_id_cycle', 'walcycdata_id_car', 'cyclecount_count', 'carcount_count']
-            results = overlay_count_osm(osm_gdf_0=osm_data, local_network=count_data, osm_columns=osm_data_columns,
-                                        local_columns=count_columns, dissolve_by='osm_id')
-            print('finish overlay')
-            [item[1].to_file("shp_files/matching_files.gpkg", layer=item[0]) for item in results.items()]
-        if local_params['matching']:
-            osm_munich_overlay = gpd.read_file('shp_files/matching_files.gpkg', layer='overlay')
-            map_matching(overlay=osm_munich_overlay, file_count_to_update=count_data, groupby_field='index').to_file(
-                "shp_files/matching_files.gpkg", layer='count_osm_matching')
-
+        osm_data = gpd.read_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network')
+        osm_columns = ['osm_id', 'highway']
+        local_columns = ['index', 'walcycdata_id_cycle', 'walcycdata_id_car']
+        count_osm(osm_gdf=osm_data, local_network=count_data, osm_columns=osm_columns, local_columns=local_columns)
     if params['data_to_server'][0]:
         local_params = params['data_to_server'][1]
         if local_params['osm']:
