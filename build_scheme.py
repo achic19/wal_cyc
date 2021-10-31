@@ -2,6 +2,7 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 from sqlalchemy import create_engine
+import sqlalchemy
 import networkx as nx
 import osmnx as ox
 from geopandas import GeoDataFrame, GeoSeries
@@ -285,19 +286,41 @@ def overlay_count_osm(osm_gdf_0: GeoDataFrame, local_network: GeoDataFrame, osm_
     # and calculate the overlay intersection between the two.
     print('osm_dissolve')
     osm_gdf = osm_gdf_0.dissolve(by=dissolve_by).reset_index()
+
+    print('azimuth')
+    osm_gdf['azimuth'] = osm_gdf['geometry'].apply(calculate_azimuth)
+    local_network['azimuth'] = local_network['geometry'].apply(calculate_azimuth)
+
     print('osm_buffer')
     osm_buffer = GeoDataFrame(osm_gdf[osm_columns],
                               geometry=osm_gdf.geometry.buffer(15, cap_style=2), crs=osm_gdf.crs)
+
     print('count_buffer')
     count_buffer = gpd.GeoDataFrame(local_network[local_columns], crs=local_network.crs,
                                     geometry=local_network.geometry.buffer(15, cap_style=2))
+
     print('overlay')
     overlay = count_buffer.overlay(osm_buffer, how='intersection')
+    # Calculate the percentage field
     overlay['areas'] = overlay.area
-    # TODo change the index to index column and check line 298
-    overlay['percentage'] = overlay['areas'] / count_buffer.area * 100
+    # The index column in the overlay layer contains the id of the count entity,
+    # therefore in order to calculate the rational area between the overlay polygon and the corresponding polygon,
+    # the index field becomes the index. In order to save the percentage results,
+    # the table is sorted by index and then the index is reset.
+    overlay.set_index('index', inplace=True)
+    temp = (overlay['areas'] / count_buffer.set_index('index').area * 100).reset_index()[0]
+    overlay = overlay.sort_index().reset_index()
+    overlay['percentage'] = temp
+
+    overlay['azimuth'] = overlay['geometry'].apply(calculate_azimuth)
+
     return {'overlay': overlay, 'osm_buffer': osm_buffer,
             'count_buffer': count_buffer, 'osm_gdf': osm_gdf}
+
+
+def calculate_azimuth(row):
+    geo = row.coords
+    return math.degrees(math.atan2(geo[-1][0] - geo[0][0], geo[-1][1] - geo[0][1])) % 360
 
 
 def map_matching(overlay: GeoDataFrame, file_count_to_update: GeoDataFrame, groupby_field: str) -> GeoDataFrame:
@@ -312,7 +335,6 @@ def map_matching(overlay: GeoDataFrame, file_count_to_update: GeoDataFrame, grou
     # for each count object return the osm id with the larger overlay with him
     matching_info = overlay.groupby(groupby_field).apply(lambda x: x[x.area == x.area.max()].iloc[0])
     # update cycle count data with the corresponding osm id
-    # matching_info.index = matching_info.index.astype('int64')
     matching_info.sort_index(inplace=True)
 
     file_count_to_update.set_index(groupby_field, drop=False, inplace=True)
@@ -372,8 +394,8 @@ if __name__ == '__main__':
               'count': [False,
                         {'cycle_count': False, 'car_count': False, 'merge_files': True, 'delete_null_zero': False}],
               'incident': [False, {'prepare_incident': True, 'join_to_bike_network': False}],
-              'count_osm': [True, {'prepare_overlay': True, 'matching': True}],
-              'data_to_server': [False, {'osm': False, 'bikes': True, 'cars': True, 'incidents': False}]}
+              'count_osm': [True, {'prepare_overlay': True, 'matching': False}],
+              'data_to_server': [False, {'osm': False, 'bikes': False, 'cars': True, 'incidents': False}]}
 
     if params['osm'][0]:
         local_params = params['osm'][1]
@@ -472,11 +494,13 @@ if __name__ == '__main__':
             print("upload cycle_count_data")
             my_cycle_count = gpd.read_file("shp_files/pr_data.gpkg", layer='cycle_count')
             my_cycle_count.to_postgis(name="cycle_count_data", con=engine, schema='production',
-                                      if_exists='replace')
+                                      if_exists='replace',
+                                      dtype={'walcycdata_last_modified': sqlalchemy.types.DateTime})
         if local_params['cars']:
             print("upload car_count_data")
             my_car_count = gpd.read_file("shp_files/pr_data.gpkg", layer='car_count', driver="GPKG")
             my_car_count.to_postgis(name="car_count_data", con=engine, schema='production',
-                                    if_exists='replace')
+                                    if_exists='replace',
+                                    dtype={'walcycdata_last_modified': sqlalchemy.types.DateTime})
         if local_params['incidents']:
             pass
