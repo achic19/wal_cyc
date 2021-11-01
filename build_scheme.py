@@ -288,8 +288,8 @@ def overlay_count_osm(osm_gdf_0: GeoDataFrame, local_network: GeoDataFrame, osm_
     osm_gdf = osm_gdf_0.dissolve(by=dissolve_by).reset_index()
 
     print('azimuth')
-    osm_gdf['azimuth'] = osm_gdf['geometry'].apply(calculate_azimuth)
-    local_network['azimuth'] = local_network['geometry'].apply(calculate_azimuth)
+    # osm_gdf['azimuth'] = osm_gdf['geometry'].apply(calculate_azimuth)
+    # local_network['azimuth'] = local_network['geometry'].apply(calculate_azimuth)
 
     print('osm_buffer')
     osm_buffer = GeoDataFrame(osm_gdf[osm_columns],
@@ -303,6 +303,7 @@ def overlay_count_osm(osm_gdf_0: GeoDataFrame, local_network: GeoDataFrame, osm_
     overlay = count_buffer.overlay(osm_buffer, how='intersection')
     # Calculate the percentage field
     overlay['areas'] = overlay.area
+    count_buffer['areas'] = count_buffer.area
     # The index column in the overlay layer contains the id of the count entity,
     # therefore in order to calculate the rational area between the overlay polygon and the corresponding polygon,
     # the index field becomes the index. In order to save the percentage results,
@@ -310,12 +311,15 @@ def overlay_count_osm(osm_gdf_0: GeoDataFrame, local_network: GeoDataFrame, osm_
     overlay.set_index('index', inplace=True)
     temp = (overlay['areas'] / count_buffer.set_index('index').area * 100).reset_index()[0]
     overlay = overlay.sort_index().reset_index()
-    overlay['percentage'] = temp
-
-    overlay['azimuth'] = overlay['geometry'].apply(calculate_azimuth)
+    overlay['percentage'] = overlay.apply(
+        lambda row: row['area'] / (count_buffer[count_buffer['index'] == row['index']]['area']), axis=1)
 
     return {'overlay': overlay, 'osm_buffer': osm_buffer,
             'count_buffer': count_buffer, 'osm_gdf': osm_gdf}
+
+
+def calculate_percentage(row, count_buffer):
+    return row['area'] / count_buffer[count_buffer['index'] == row['index']]['area']
 
 
 def calculate_azimuth(row):
@@ -333,7 +337,10 @@ def map_matching(overlay: GeoDataFrame, file_count_to_update: GeoDataFrame, grou
     """
     print('start map matching')
     # for each count object return the osm id with the larger overlay with him
-    matching_info = overlay.groupby(groupby_field).apply(lambda x: x[x.area == x.area.max()].iloc[0])
+    # ToDo why there is Null values in overlay
+    overlay['percentage'].fillna(-2, inplace=True)
+    matching_info = overlay.groupby(groupby_field).apply(find_optimal_applicant)
+    matching_info = matching_info[matching_info.notna()]
     # update cycle count data with the corresponding osm id
     matching_info.sort_index(inplace=True)
 
@@ -357,16 +364,15 @@ def find_optimal_applicant(group):
     :return:
     """
     if len(group) > 1:
-        group.sort_values(['areas', 'osm_fclass_hir'], ascending=False, inplace=True)
-        for row in group:
-            if is_parallel_more_than_min(row):
-                return row
+        group.sort_values(['osm_fclass_hir', 'areas'], ascending=False, inplace=True)
+        for row in group.iterrows():
+            if is_parallel_more_than_min(row[1]):
+                return row[1]
+
     else:
         row = group.iloc[0]
         if is_parallel_more_than_min(row):
             return row
-
-    # lambda x: x[x.area == x.area.max()].iloc[0]
 
 
 def is_parallel_more_than_min(row) -> bool:
@@ -376,7 +382,9 @@ def is_parallel_more_than_min(row) -> bool:
     :param row:
     :return:
     """
-    if row['parallel'] < 30 and row['percentage'] > 20:
+    # if row['parallel'] < 30 and row['percentage'] > 20:
+
+    if row['percentage'] > 20:
         return True
     else:
         return False
