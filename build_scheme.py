@@ -302,17 +302,19 @@ def overlay_count_osm(osm_gdf_0: GeoDataFrame, local_network: GeoDataFrame, osm_
     print('overlay')
     overlay = count_buffer.overlay(osm_buffer, how='intersection')
     # Calculate the percentage field
+    print('percentage')
     overlay['areas'] = overlay.area
     count_buffer['areas'] = count_buffer.area
     # The index column in the overlay layer contains the id of the count entity,
     # therefore in order to calculate the rational area between the overlay polygon and the corresponding polygon,
     # the index field becomes the index. In order to save the percentage results,
-    # the table is sorted by index and then the index is reset.
+    # the table is sorted by index and area and then the index is reset.
     overlay.set_index('index', inplace=True)
-    temp = (overlay['areas'] / count_buffer.set_index('index').area * 100).reset_index()[0]
-    overlay = overlay.sort_index().reset_index()
-    overlay['percentage'] = overlay.apply(
-        lambda row: row['area'] / (count_buffer[count_buffer['index'] == row['index']]['area']), axis=1)
+    temp = (overlay['areas'] * 100 / count_buffer[count_buffer['index'].isin(overlay.index)].set_index('index')[
+        'areas']).reset_index()
+    temp = temp.sort_values(['index', 'areas'])['areas']
+    overlay = overlay.reset_index().sort_values(['index', 'areas'])
+    overlay['percentage'] = temp.values
 
     return {'overlay': overlay, 'osm_buffer': osm_buffer,
             'count_buffer': count_buffer, 'osm_gdf': osm_gdf}
@@ -337,8 +339,6 @@ def map_matching(overlay: GeoDataFrame, file_count_to_update: GeoDataFrame, grou
     """
     print('start map matching')
     # for each count object return the osm id with the larger overlay with him
-    # ToDo why there is Null values in overlay
-    overlay['percentage'].fillna(-2, inplace=True)
     matching_info = overlay.groupby(groupby_field).apply(find_optimal_applicant)
     matching_info = matching_info[matching_info.notna()]
     # update cycle count data with the corresponding osm id
