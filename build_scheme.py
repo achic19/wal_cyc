@@ -97,32 +97,6 @@ def to_bool(osm_df, field):
     return osm_df
 
 
-def clear_footway_near_other_elements(osm_network: GeoDataFrame):
-    """
-    When the footway is around other elements, remove them for later use based on two conditions: 1. they are at the
-    same level and they quite parallel
-    :return:
-    """
-    footway = osm_network.loc['footway'].set_index('walcycdata_id')
-    roads = osm_network.drop(labels=['footway', 'path', 'service'], axis=0).set_index('walcycdata_id')
-    buffer = gpd.GeoDataFrame(footway[['osm_bridge', 'osm_tunnel']], crs=osm_network.crs,
-                              geometry=footway.geometry.buffer(20, cap_style=2))
-    # For evaluation only
-    buffer.to_file("shp_files/pr_data.gpkg", layer='buffer_footway', driver="GPKG")
-    footway_with_roads = buffer.reset_index().sjoin(roads, how='inner', predicate='crosses')
-    footway_with_roads_contains = buffer.reset_index().sjoin(roads, how='inner', predicate='contains')
-    footway_with_roads = footway_with_roads.append(footway_with_roads_contains)
-    footway_with_roads_same_level = footway_with_roads[
-        (footway_with_roads['osm_tunnel_left'] == footway_with_roads['osm_tunnel_right']) & (
-                footway_with_roads['osm_bridge_left'] == footway_with_roads['osm_bridge_right'])]
-    footway_with_roads_same_level['is_parallel'] = footway_with_roads_same_level.apply(
-        lambda x: is_parallel(footway.loc[x['walcycdata_id']].geometry.coords,
-                              roads.loc[x['index_right']].geometry.coords
-                              ), axis=1)
-    footway_with_roads_same_level = footway_with_roads_same_level[footway_with_roads_same_level['is_parallel']]
-    return osm_network[~osm_network['walcycdata_id'].isin(footway_with_roads_same_level['walcycdata_id'].unique())]
-
-
 def is_parallel(geo_1: CoordinateSequence, geo_2: CoordinateSequence):
     """
     This function check whether two geometries are parallel (with a tolerance of 20 degrees)
@@ -244,6 +218,7 @@ def general_tasks(file: GeoDataFrame, is_type: bool) -> GeoDataFrame:
     """
     print("gis_oper_for_all")
     file = file[~file.is_empty]
+
     clipped = gpd.clip(file.to_crs(crs), clip_file)
     clipped = clipped[~clipped.is_empty]
     if is_type:
@@ -288,8 +263,8 @@ def overlay_count_osm(osm_gdf_0: GeoDataFrame, local_network: GeoDataFrame, osm_
     osm_gdf = osm_gdf_0.dissolve(by=dissolve_by).reset_index()
 
     print('azimuth')
-    # osm_gdf['azimuth'] = osm_gdf['geometry'].apply(calculate_azimuth)
-    # local_network['azimuth'] = local_network['geometry'].apply(calculate_azimuth)
+    osm_gdf['azimuth'] = osm_gdf[dissolve_by].apply(azimuth_osm)
+    local_network['azimuth'] = local_network['geometry'].apply(calculate_azimuth)
 
     print('osm_buffer')
     osm_buffer = GeoDataFrame(osm_gdf[osm_columns],
@@ -320,13 +295,47 @@ def overlay_count_osm(osm_gdf_0: GeoDataFrame, local_network: GeoDataFrame, osm_
             'count_buffer': count_buffer, 'osm_gdf': osm_gdf}
 
 
-def calculate_percentage(row, count_buffer):
-    return row['area'] / count_buffer[count_buffer['index'] == row['index']]['area']
+def azimuth_osm(osm_id):
+    pnt_0 = nodes[ways[osm_id][0]]
+    pnt_1 = nodes[ways[osm_id][-1]]
+    return math.degrees(math.atan2(pnt_1[0] - pnt_0[0], pnt_1[1] - pnt_0[1])) % 360
+
+
+def list_str(as_str):
+    print('list_str')
+    # pd_1 = pd.DataFrame({'index': [680, 122956, 122957], 'areas': [20, 80, 60]})
+    as_str = list(map(lambda x: x + ',', as_str))
+    as_str = ''.join(as_str)[:-1]
+    return as_str
+
+
+def osm_id_req(id_osm_local):
+    print('osm_id_req')
+    import overpy
+
+    api = overpy.Overpass()
+    overpass_query = """[out:json];area[name="München"];way(id:""" + id_osm_local + """); out geom;"""
+    result = api.query(overpass_query)
+    return list(map(lambda x: calc_azi(x.attributes['geometry']), result.ways))
+
+
+def calc_azi(geom):
+    print('calc_azi')
+    import math
+    return math.degrees(math.atan2(geom[-1]['lon'] - geom[0]['lon'], geom[-1]['lat'] - geom[0]['lat'])) % 360
 
 
 def calculate_azimuth(row):
-    geo = row.coords
-    return math.degrees(math.atan2(geo[-1][0] - geo[0][0], geo[-1][1] - geo[0][1])) % 360
+
+    try:
+        geo = row.coords
+        return math.degrees(math.atan2(geo[-1][0] - geo[0][0], geo[-1][1] - geo[0][1])) % 360
+    except:
+        pass
+
+
+def calculate_percentage(row, count_buffer):
+    return row['area'] / count_buffer[count_buffer['index'] == row['index']]['area']
 
 
 def map_matching(overlay: GeoDataFrame, file_count_to_update: GeoDataFrame, groupby_field: str) -> GeoDataFrame:
@@ -391,6 +400,14 @@ def is_parallel_more_than_min(row) -> bool:
 
 
 if __name__ == '__main__':
+
+    import pickle
+
+    with open('response_jsons.pkl', 'rb') as response_jsons_file:
+        response_jsons = pickle.load(response_jsons_file)
+    ways = {way['id']: way['nodes'] for way in response_jsons[0]['elements'] if way['type'] == 'way'}
+    nodes = {node['id']: (node['lon'], node['lat']) for node in response_jsons[0]['elements'] if
+             node['type'] == 'node'}
     # general code
     clip_file = gpd.read_file('shp_files/munich_3857.shp')
     crs = "EPSG:3857"
@@ -398,7 +415,7 @@ if __name__ == '__main__':
     type_to_remove = ['C', 'D', 'NT', 'S', 'T', 'U']
     engine = create_engine('postgresql://research:1234@34.142.109.94:5432/walcycdata')
 
-    params = {'osm': [False, {'prepare_osm_data': False, 'osm_file': True, 'car_bike_osm': False}],
+    params = {'osm': [False, {'prepare_osm_data': True, 'osm_file': True, 'car_bike_osm': False}],
               'count': [False,
                         {'cycle_count': False, 'car_count': False, 'merge_files': True, 'delete_null_zero': False}],
               'incident': [False, {'prepare_incident': True, 'join_to_bike_network': False}],
@@ -414,14 +431,6 @@ if __name__ == '__main__':
             my_osm_file = osm_file_def()
             my_osm_file.to_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network', driver="GPKG")
 
-        if local_params['car_bike_osm']:
-            print('delete superfluous information')
-            osm_file = gpd.read_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network')
-            bike_osm = osm_file.set_index('highway').drop(labels=['steps'], axis=0)
-            bike_osm = clear_footway_near_other_elements(bike_osm)
-            car_osm = bike_osm.drop(labels=['footway', 'cycleway', 'bridleway'], axis=0)
-            bike_osm.to_file("shp_files/pr_data.gpkg", layer='cycle_osm', driver="GPKG")
-            car_osm.reset_index().to_file("shp_files/pr_data.gpkg", layer='car_osm', driver="GPKG")
     if params['count'][0]:
         local_params = params['count'][1]
 
