@@ -168,15 +168,21 @@ def join_to_bike_network(incident_gdb: GeoDataFrame, network: GeoDataFrame) -> G
     return gpd.sjoin_nearest(incident_gdb, network, how='left', distance_col='dist')
 
 
-def cycle_count_def(count):
+def cycle_count_def(count, counts_nodes: GeoDataFrame):
+    """
+    This method calcultes
+    :param count:
+    :param counts_nodes: for Azimuth calculation
+    :return:
+    """
     # project and clip
-    count = general_tasks(file=count, is_type=True)
+    count = general_tasks(file=count, is_type=True, counts_nodes=counts_nodes)
     # change table names
     count.rename(
         columns={"NO": "cyclecount_id", "ZAEHLUN~19": "cyclecount_count"}, inplace=True)
 
     # drop fields
-    count = count[['FROMNODENO', 'TONODENO', 'cyclecount_id', 'cyclecount_count', 'TSYSSET', 'geometry']]
+    count = count[['FROMNODENO', 'TONODENO', 'cyclecount_id', 'cyclecount_count', 'TSYSSET', 'azimuth', 'geometry']]
 
     # new fields, walcycdata_id = a unique number with leading 2 for cycle count
     count.reset_index(inplace=True)
@@ -189,15 +195,15 @@ def cycle_count_def(count):
     return count.drop('index', axis=1)
 
 
-def car_count_def(count):
+def car_count_def(count, counts_nodes: GeoDataFrame):
     # project and clip
-    count = general_tasks(file=count, is_type=True)
+    count = general_tasks(file=count, is_type=True, counts_nodes=counts_nodes)
     # change table names
     count.rename(
         columns={"NO": "carcount_id", "ZOhlung_~7": "carcount_count"}, inplace=True)
 
     # drop fields
-    count = count[['FROMNODENO', 'TONODENO', 'carcount_id', 'carcount_count', 'TSYSSET', 'geometry']]
+    count = count[['FROMNODENO', 'TONODENO', 'carcount_id', 'carcount_count', 'TSYSSET', 'azimuth', 'geometry']]
 
     # new fields, walcycdata_id = a unique number with leading 3 for cycle count
     count.reset_index(inplace=True)
@@ -210,22 +216,38 @@ def car_count_def(count):
     return count.drop('index', axis=1)
 
 
-def general_tasks(file: GeoDataFrame, is_type: bool) -> GeoDataFrame:
+def general_tasks(file: GeoDataFrame, is_type: bool, counts_nodes: GeoDataFrame) -> GeoDataFrame:
     """
     :param file: delete nan geometry and than reprojected, clip and do it unidirectional
     :param is_type: control whether to remove certain types
     :return: gdf
+    :param counts_nodes: for Azimuth calculation
     """
-    print("gis_oper_for_all")
+    print("_gis_oper_for_all")
+    print('__clip')
     file = file[~file.is_empty]
-
-    clipped = gpd.clip(file.to_crs(crs), clip_file)
-    clipped = clipped[~clipped.is_empty]
+    # "Sjoin" is used to remove the entire segment that intersects the clip.
+    clipped = file.to_crs(crs).sjoin(clip_file, how="inner", predicate='within')
+    clipped = clipped[~clipped.is_empty][file.columns]
+    # calculate azimuth
+    print("__calculate azimuth")
+    counts_nodes.set_index('NO', inplace=True)
+    clipped['azimuth'] = clipped.apply(
+        lambda row: calculate_azimuth(counts_nodes.loc[row['FROMNODENO']], counts_nodes.loc[row['TONODENO']]), axis=1)
     if is_type:
+        print("__calculate is_type")
         clipped['is_type'] = clipped['TSYSSET'].apply(remove_type)
         return clipped[clipped['is_type']]
     else:
         return clipped
+
+
+def calculate_azimuth(p1, p2):
+    try:
+        return math.degrees(math.atan2(p2['XCOORD'] - p1['XCOORD'], p2['YCOORD'] - p1['YCOORD'])) % 360
+    except:
+        print('can not calculate azimuth')
+        return -1
 
 
 def remove_type(value):
@@ -264,7 +286,6 @@ def overlay_count_osm(osm_gdf_0: GeoDataFrame, local_network: GeoDataFrame, osm_
 
     print('azimuth')
     osm_gdf['azimuth'] = osm_gdf[dissolve_by].apply(azimuth_osm)
-    local_network['azimuth'] = local_network['geometry'].apply(calculate_azimuth)
 
     print('osm_buffer')
     osm_buffer = GeoDataFrame(osm_gdf[osm_columns],
@@ -290,15 +311,36 @@ def overlay_count_osm(osm_gdf_0: GeoDataFrame, local_network: GeoDataFrame, osm_
     temp = temp.sort_values(['index', 'areas'])['areas']
     overlay = overlay.reset_index().sort_values(['index', 'areas'])
     overlay['percentage'] = temp.values
-
+    print('calculate angles between elements')
+    overlay['parallel'] = overlay.apply(lambda x: angle_between(x, local_network, osm_gdf), axis=1)
     return {'overlay': overlay, 'osm_buffer': osm_buffer,
             'count_buffer': count_buffer, 'osm_gdf': osm_gdf}
+
+
+def angle_between(row, local_network, osm_gdf):
+    """
+    This function add the angle between osm element and local element (the names of these elements are stored in row) and
+    azimuth in local_network and osm_gdf
+    :param osm_gdf:
+    :param local_network:
+    :param row:
+    :return:
+    """
+    local_az = local_network[local_network['index'] == row['index']]['azimuth'].values[0]
+    osm_az = osm_gdf[osm_gdf['osm_id'] == row['osm_id']]['azimuth'].values[0]
+    if local_az == -1 or osm_az == -1:
+        return -1
+    else:
+        return abs(local_az - osm_az) % 180 % 150
 
 
 def azimuth_osm(osm_id):
     pnt_0 = nodes[ways[osm_id][0]]
     pnt_1 = nodes[ways[osm_id][-1]]
-    return math.degrees(math.atan2(pnt_1[0] - pnt_0[0], pnt_1[1] - pnt_0[1])) % 360
+    if pnt_0 == pnt_1:
+        return -1
+    else:
+        return math.degrees(math.atan2(pnt_1[0] - pnt_0[0], pnt_1[1] - pnt_0[1])) % 360
 
 
 def list_str(as_str):
@@ -325,15 +367,6 @@ def calc_azi(geom):
     return math.degrees(math.atan2(geom[-1]['lon'] - geom[0]['lon'], geom[-1]['lat'] - geom[0]['lat'])) % 360
 
 
-def calculate_azimuth(row):
-
-    try:
-        geo = row.coords
-        return math.degrees(math.atan2(geo[-1][0] - geo[0][0], geo[-1][1] - geo[0][1])) % 360
-    except:
-        pass
-
-
 def calculate_percentage(row, count_buffer):
     return row['area'] / count_buffer[count_buffer['index'] == row['index']]['area']
 
@@ -347,8 +380,10 @@ def map_matching(overlay: GeoDataFrame, file_count_to_update: GeoDataFrame, grou
     :return:
     """
     print('start map matching')
+    print(' find the best matching')
     # for each count object return the osm id with the larger overlay with him
     matching_info = overlay.groupby(groupby_field).apply(find_optimal_applicant)
+    print(' finish the best matching')
     matching_info = matching_info[matching_info.notna()]
     # update cycle count data with the corresponding osm id
     matching_info.sort_index(inplace=True)
@@ -369,18 +404,27 @@ def find_optimal_applicant(group):
     1. The highest in the hierarchy should be the first ti check
     2. Then these with the largest overlay should be chosen
     3. Select the applicant if he meets the parallel condition and the minimum overlay
+    4. in case of more no one is match the
     :param group: group of applicants (osm entities)
     :return:
     """
     if len(group) > 1:
         group.sort_values(['osm_fclass_hir', 'areas'], ascending=False, inplace=True)
-        for row in group.iterrows():
-            if is_parallel_more_than_min(row[1]):
-                return row[1]
-
+        for row_temp in group.iterrows():
+            row = row_temp[1]
+            if is_parallel_more_than_min(row):
+                row['valid'] = True
+                return row
+        row = group.iloc[0]
+        row['valid'] = False
+        return row
     else:
         row = group.iloc[0]
         if is_parallel_more_than_min(row):
+            row['valid'] = True
+            return row
+        else:
+            row['valid'] = False
             return row
 
 
@@ -391,16 +435,39 @@ def is_parallel_more_than_min(row) -> bool:
     :param row:
     :return:
     """
-    # if row['parallel'] < 30 and row['percentage'] > 20:
 
-    if row['percentage'] > 20:
+    if row['parallel'] < 30 and row['percentage'] > 20:
         return True
     else:
         return False
 
 
+def find_the_azimuth_between_two_options(az_1, az_2):
+    """
+    The method returns an azimuth that is not zero. The two values should be the same if they are not zero.
+    :param az_1
+    :param az_2
+    :return:
+    """
+
+    if az_1 != 0:
+        if az_2 != 0:
+            if round(az_1) == round(az_2):
+                return az_1
+            else:
+                return -2
+        else:
+            return az_1
+    else:
+        if az_2 != 0:
+            return az_2
+        else:
+            return -1
+
+
 if __name__ == '__main__':
 
+    # Get the the original OSM network without any editing
     import pickle
 
     with open('response_jsons.pkl', 'rb') as response_jsons_file:
@@ -408,21 +475,24 @@ if __name__ == '__main__':
     ways = {way['id']: way['nodes'] for way in response_jsons[0]['elements'] if way['type'] == 'way'}
     nodes = {node['id']: (node['lon'], node['lat']) for node in response_jsons[0]['elements'] if
              node['type'] == 'node'}
-    # general code
+
+    # global variables
     clip_file = gpd.read_file('shp_files/munich_3857.shp')
     crs = "EPSG:3857"
     date = pd.to_datetime("today")
     type_to_remove = ['C', 'D', 'NT', 'S', 'T', 'U']
     engine = create_engine('postgresql://research:1234@34.142.109.94:5432/walcycdata')
-
+    # dictionary to control which function to run
     params = {'osm': [False, {'prepare_osm_data': True, 'osm_file': True, 'car_bike_osm': False}],
-              'count': [False,
-                        {'cycle_count': False, 'car_count': False, 'merge_files': True, 'delete_null_zero': False}],
+              'count': [True,
+                        {'cycle_count': False, 'car_count': False, 'merge_files': True}],
               'incident': [False, {'prepare_incident': True, 'join_to_bike_network': False}],
-              'count_osm': [True, {'prepare_overlay': True, 'matching': False}],
+              'count_osm': [False, {'prepare_overlay': True, 'matching': True}],
+              'analysis': False,
               'data_to_server': [False, {'osm': False, 'bikes': False, 'cars': True, 'incidents': False}]}
 
     if params['osm'][0]:
+        # Prepare OSM information
         local_params = params['osm'][1]
         if local_params['prepare_osm_data']:
             prepare_osm_data()
@@ -438,40 +508,44 @@ if __name__ == '__main__':
             print('create cycle_count table')
             # upload files
             cycle_count = gpd.read_file('shp_files/cycle_count_data.shp')
-            my_cycle_count = cycle_count_def(cycle_count)
+            cycle_count_nodes = gpd.read_file('shp_files/cycle_count_data_nodes.shp')
+            my_cycle_count = cycle_count_def(count=cycle_count, counts_nodes=cycle_count_nodes)
+            print('write to disk')
             my_cycle_count.to_file("shp_files/pr_data.gpkg", layer='cycle_count', driver="GPKG")
 
         if local_params['car_count']:
             print('create car_count table')
             car_count = gpd.read_file('shp_files/cars_count_data.shp')
-            my_car_count = car_count_def(car_count)
+            car_count_nodes = gpd.read_file('shp_files/car_count_data_nodes.shp')
+            my_car_count = car_count_def(car_count, car_count_nodes)
             my_car_count.to_file("shp_files/pr_data.gpkg", layer='car_count', driver="GPKG")
 
         if local_params['merge_files']:
             print('merge file')
             cycle_count = gpd.read_file("shp_files/pr_data.gpkg", layer='cycle_count')[
-                ['walcycdata_id', 'cyclecount_id', 'cyclecount_count', 'geometry']]
+                ['walcycdata_id', 'cyclecount_id', 'cyclecount_count', 'azimuth', 'FROMNODENO', 'TONODENO', 'geometry']]
             car_count = gpd.read_file("shp_files/pr_data.gpkg", layer='car_count')[
-                ['walcycdata_id', 'carcount_id', 'carcount_count', 'geometry']]
+                ['walcycdata_id', 'carcount_id', 'carcount_count', 'azimuth', 'FROMNODENO', 'TONODENO', 'geometry']]
 
             cycle_count.drop_duplicates(subset=['cyclecount_id'], inplace=True)
             car_count.drop_duplicates(subset=['carcount_id'], inplace=True)
 
-            all_count = cycle_count.merge(right=car_count, left_on='cyclecount_id',
-                                          right_on='carcount_id', how='outer', suffixes=('_cycle', '_car'))
+            all_count = cycle_count.merge(right=car_count, left_on=['FROMNODENO', 'TONODENO'],
+                                          right_on=['FROMNODENO', 'TONODENO'], how='outer', suffixes=('_cycle', '_car'))
             # 'geometry_cycle' will be the geometry for all the the entities in the new file
             all_count.loc[all_count['geometry_cycle'].isnull(), 'geometry_cycle'] = \
                 all_count[all_count['geometry_cycle'].isnull()]['geometry_car']
             all_count = GeoDataFrame(all_count, geometry=all_count['geometry_cycle'], crs=crs)
 
             all_count.drop(['geometry_car', 'geometry_cycle'], axis=1, inplace=True)
+            # Combine two azimuth columns into one
+            all_count[['azimuth_car', 'azimuth_cycle']] = all_count[
+                ['azimuth_car', 'azimuth_cycle']].fillna(0)
+            print('_find_the_azimuth_between_two_options')
+            all_count['azimuth'] = all_count.apply(
+                lambda row: find_the_azimuth_between_two_options(row['azimuth_cycle'], row['azimuth_car']), axis=1)
+            print('write to disk')
             all_count.reset_index().to_file("shp_files/pr_data.gpkg", layer='all_count', driver="GPKG")
-        if local_params['delete_null_zero']:
-            all_count = gpd.read_file("shp_files/pr_data.gpkg", layer='all_count')
-            all_count[['Cyclecount_count', 'Carcount_count']] = all_count[
-                ['Cyclecount_count', 'Carcount_count']].fillna(0)
-            all_count = all_count[(all_count['Cyclecount_count'] != 0) | (all_count['Carcount_count'] != 0)]
-            all_count.to_file("shp_files/pr_data.gpkg", layer='all_count_no_zero', driver="GPKG")
 
     if params['incident'][0]:
         print('work on incident data')
@@ -490,10 +564,11 @@ if __name__ == '__main__':
         local_params = params['count_osm'][1]
         count_data = gpd.read_file("shp_files/pr_data.gpkg", layer='all_count')
         if local_params['prepare_overlay']:
-            print(' start overlay')
+            print('start overlay')
             osm_data = gpd.read_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network')
-            osm_data_columns = ['osm_id', 'highway', 'osm_fclass_hir']
-            count_columns = ['index', 'walcycdata_id_cycle', 'walcycdata_id_car', 'cyclecount_count', 'carcount_count']
+            osm_data_columns = ['osm_id', 'highway', 'osm_fclass_hir', 'azimuth']
+            count_columns = ['index', 'walcycdata_id_cycle', 'walcycdata_id_car', 'cyclecount_count', 'carcount_count',
+                             'azimuth']
             results = overlay_count_osm(osm_gdf_0=osm_data, local_network=count_data, osm_columns=osm_data_columns,
                                         local_columns=count_columns, dissolve_by='osm_id')
             print('finish overlay')
@@ -502,6 +577,16 @@ if __name__ == '__main__':
             osm_munich_overlay = gpd.read_file('shp_files/matching_files.gpkg', layer='overlay')
             map_matching(overlay=osm_munich_overlay, file_count_to_update=count_data, groupby_field='index').to_file(
                 "shp_files/matching_files.gpkg", layer='count_osm_matching')
+    if params['analysis']:
+        print('analysis')
+        from classes.Analysis import Analysis
+
+        cat_file = pd.read_csv('shp_files/cat.csv')
+        osm_data = gpd.read_file("shp_files/matching_files.gpkg", layer='osm_gdf')
+        matching_data = gpd.read_file("shp_files/matching_files.gpkg", layer='count_osm_matching')[
+            'osm_walcycdata_id'].unique()
+        results = Analysis.osm_network_local_network(osm_network=osm_data, osm_id_list=matching_data, cat_file=cat_file)
+        results.to_file("shp_files/matching_files.gpkg", layer='osm_linked_to_counting', driver="GPKG")
 
     if params['data_to_server'][0]:
         local_params = params['data_to_server'][1]
