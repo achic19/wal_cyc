@@ -1,69 +1,48 @@
 from geopandas import GeoDataFrame
 import math
+import geopandas as gpd
+import numpy as np
 
 
-class CountOsm:
-    def __init__(self):
-        self.p = 0
+class Matching:
+    def __init__(self, osm_matching: GeoDataFrame, osm):
+        print("Matching")
+        self.osm_matching = osm_matching
+        self.osm = osm
 
-    def overlay_count_osm(self, osm_gdf_0: GeoDataFrame, local_network: GeoDataFrame, osm_columns: list,
-                          local_columns: list, dissolve_by: str) -> dict:
+    def update_by_direction(self):
+        print("_update_by_direction")
+        self.osm_matching['osm_walcycdata_id'] = self.osm_matching.apply(
+            lambda row: self.swap_directions(row[['azimuth', 'osm_walcycdata_id']]), axis=1)
+        pass
+
+    def swap_directions(self, row):
         """
-        This function calculate between osm entities and local network entities
-        :param osm_gdf_0: The OSM network to work on
-        :param local_network: count data on local network
-        :param local_columns: fields of local network to save while the matching process
-        :param osm_columns: fields of osm network to save while the matching process
-        :return: list of all the gis files been created during implementation of this stage
-        :param dissolve_by: before buffering, the code dissolve osm entities by that field
+        This method check wether the opposite side of road should be linked into that matching object
+        :param row:
+        :return:
         """
-
-        # make buffer of 10 meters around each polyline in the both dataframes
-        # and calculate the overlay intersection between the two.
-        print('osm_dissolve')
-        osm_gdf = osm_gdf_0.dissolve(by=dissolve_by).reset_index()
-
-        print('azimuth')
-        local_network['azimuth'] = local_network['geometry'].apply(self.calculate_azimuth)
-        osm_gdf['azimuth'] = osm_gdf[dissolve_by].apply(azimuth_osm)
-
-        print('osm_buffer')
-        osm_buffer = GeoDataFrame(osm_gdf[osm_columns],
-                                  geometry=osm_gdf.geometry.buffer(15, cap_style=2), crs=osm_gdf.crs)
-
-        print('count_buffer')
-        count_buffer = gpd.GeoDataFrame(local_network[local_columns], crs=local_network.crs,
-                                        geometry=local_network.geometry.buffer(15, cap_style=2))
-
-        print('overlay')
-        overlay = count_buffer.overlay(osm_buffer, how='intersection')
-        # Calculate the percentage field
-        print('percentage')
-        overlay['areas'] = overlay.area
-        count_buffer['areas'] = count_buffer.area
-        # The index column in the overlay layer contains the id of the count entity,
-        # therefore in order to calculate the rational area between the overlay polygon and the corresponding polygon,
-        # the index field becomes the index. In order to save the percentage results,
-        # the table is sorted by index and area and then the index is reset.
-        overlay.set_index('index', inplace=True)
-        temp = (overlay['areas'] * 100 / count_buffer[count_buffer['index'].isin(overlay.index)].set_index('index')[
-            'areas']).reset_index()
-        temp = temp.sort_values(['index', 'areas'])['areas']
-        overlay = overlay.reset_index().sort_values(['index', 'areas'])
-        overlay['percentage'] = temp.values
-        print('calculate angles between elements')
-        overlay['parallel'] = overlay.apply(lambda x: angle_between(x, local_network, osm_gdf), axis=1)
-        return {'overlay': overlay, 'osm_buffer': osm_buffer,
-                'count_buffer': count_buffer, 'osm_gdf': osm_gdf}
-
-    def calc_azi(self, geom):
-        print('calc_azi')
-        import math
-        return math.degrees(math.atan2(geom[-1]['lon'] - geom[0]['lon'], geom[-1]['lat'] - geom[0]['lat'])) % 360
-
-    def calculate_azimuth(self, row):
-        try:
-            geo = row.coords
-            return math.degrees(math.atan2(geo[-1][0] - geo[0][0], geo[-1][1] - geo[0][1])) % 360
-        except:
+        # no matching object
+        if row['osm_walcycdata_id'] == -1:
             return -1
+        osm_object = self.osm[self.osm['osm_id'] == row['osm_walcycdata_id']]
+        # no opposite side to the OSM object
+        if osm_object['pair'].isnull().any():
+            return -1
+        if abs(row.azimuth - osm_object.azimuth.values[0]) > 30:
+            # Select the opposite direction
+            return osm_object['pair'].values[0]
+        else:
+            return row['osm_walcycdata_id']
+
+
+if __name__ == '__main__':
+    import os
+
+    os.chdir(r'D:\Users\Technion\Sagi Dalyot - AchituvCohen\WalCycData\shared_project')
+    matching_data = gpd.read_file('shp_files/matching_files.gpkg', layer='count_osm_matching')
+    my_osm_data = gpd.read_file("shp_files/two_ways.gpkg", layer='osm_gdf')
+    my_matching = Matching(matching_data, my_osm_data)
+    my_matching.update_by_direction()
+    print("_write to disk")
+    my_matching.osm_matching.to_file("shp_files/two_ways.gpkg", layer='my_matching_dirc', driver="GPKG")
