@@ -6,11 +6,14 @@ from shapely.geometry import LineString
 import pandas as pd
 import numpy as np
 from math import degrees, atan2
+from classes.munich import *
 
 
-class OSM:
-    crs = "EPSG:3857"
+class OSM(MunichData):
+
     date = pd.to_datetime("today")
+    osm_column_names = ['walcycdata_id', 'walcycdata_is_valid', 'walcycdata_last_modified', 'osm_id', 'osm_fclass',
+                        'osm_name', 'osm_oneway', 'osm_maxspeed', 'osm_layer', 'osm_bridge', 'osm_tunnel', 'geometry']
 
     @staticmethod
     def prepare_osm_data():
@@ -46,7 +49,7 @@ class OSM:
     @staticmethod
     def osm_file_def(osm_df: GeoDataFrame, cat_file: pd.DataFrame):
         # drop duplicate
-        osm_df.drop_duplicates(subset=['geometry'], inplace=True)
+        osm_df.drop_duplicates(subset=['osmid'], inplace=True)
         # change table names
         osm_df.rename(
             columns={"osmid": "osm_id", "name": "osm_name", "oneway": "osm_oneway",
@@ -62,7 +65,8 @@ class OSM:
         # bool values  -bridge,tunnel
         for field in ['osm_bridge', 'osm_tunnel', "osm_oneway"]:
             osm_df[field].loc[~osm_df[field].isnull()] = 1  # not nan
-            osm_df[field].loc[(osm_df[field].isnull()) | (osm_df[field] == 'no')] = 0  # not nan
+            osm_df[field].loc[(osm_df[field].isnull()) | (osm_df[field] == 'no')] = 0
+        osm_df['osm_name'].fillna('no_name', inplace=True)
 
         # new fields, walcycdata_id = a unique number with leading 4 for osm
         osm_df.reset_index(inplace=True)
@@ -79,17 +83,16 @@ class OSM:
         osm_df[to_int] = osm_df[to_int].apply(lambda x: pd.to_numeric(x, errors='coerce')).fillna(0).astype(int)
 
         # Obtain azimuth
-        osm_df['azimuth'] = osm_df['geometry'].apply(OSM.__azimuth_osm)
-        return osm_df.drop('index', axis=1)
+        def azimuth_osm(geometry):
+            pnt_0 = geometry.coords[0]
+            pnt_1 = geometry.coords[-1]
+            if pnt_0 == pnt_1:
+                return -1
+            else:
+                return degrees(atan2(pnt_1[0] - pnt_0[0], pnt_1[1] - pnt_0[1])) % 360
 
-    @staticmethod
-    def __azimuth_osm(geometry):
-        pnt_0 = geometry.coords[0]
-        pnt_1 = geometry.coords[-1]
-        if pnt_0 == pnt_1:
-            return -1
-        else:
-            return degrees(atan2(pnt_1[0] - pnt_0[0], pnt_1[1] - pnt_0[1])) % 360
+        osm_df['azimuth'] = osm_df['geometry'].apply(azimuth_osm)
+        return osm_df.drop('index', axis=1)
 
     @staticmethod
     def find_the_opposite_roads(osm_gdf: GeoDataFrame):

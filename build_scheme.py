@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 from sqlalchemy import create_engine, MetaData
 import sqlalchemy
-from migrate.changeset.constraint import PrimaryKeyConstraint, ConstraintChangeset
+from migrate.changeset.constraint import PrimaryKeyConstraint
 
 import networkx as nx
 import osmnx as ox
@@ -455,7 +455,7 @@ if __name__ == '__main__':
     type_to_remove = ['C', 'D', 'NT', 'S', 'T', 'U']
     engine = create_engine('postgresql://research:1234@34.142.109.94:5432/walcycdata')
     # dictionary to control which function to run
-    params = {'osm': [False, {'prepare_osm_data': False, 'osm_file': False, 'car_bike_osm': False}],
+    params = {'osm': [True, {'prepare_osm_data': False, 'osm_file': True, 'data_to_server': True}],
               'count': [False,
                         {'cycle_count': False, 'car_count': False, 'merge_files': True}],
               'incident': [False, {'prepare_incident': True, 'join_to_bike_network': False}],
@@ -475,6 +475,11 @@ if __name__ == '__main__':
             cat_file = pd.read_csv('shp_files/cat.csv')
             OSM.osm_file_def(osm_df, cat_file).to_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network',
                                                        driver="GPKG")
+        if local_params['data_to_server']:
+            print("upload osm data")
+            osm_data = gpd.read_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network')
+            OSM.data_to_server(data_to_upload=osm_data, columns_to_upload=OSM.osm_column_names,
+                               table_name='openstreetmap_road_network')
 
     if params['count'][0]:
         local_params = params['count'][1]
@@ -550,20 +555,6 @@ if __name__ == '__main__':
 
     if params['data_to_server'][0]:
         local_params = params['data_to_server'][1]
-        if local_params['osm']:
-            print("upload cycle_count_data")
-            my_cycle_count = gpd.read_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network')
-            my_cycle_count.to_postgis(name="test", con=engine, schema='production',
-                                      if_exists='replace',
-                                      dtype={'walcycdata_last_modified': sqlalchemy.types.DateTime})
-        # sql = """
-        #        ALTER TABLE test
-        #        MODIFY osm_id NOT NULL
-        #    """
-        metadata = MetaData(bind=engine, schema='production')
-        my_table = sqlalchemy.Table('test', metadata, autoload=True)
-        cons = PrimaryKeyConstraint('osm_id', table=my_table)
-        cons.create()
 
 
         if local_params['bikes']:
