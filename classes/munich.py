@@ -2,12 +2,13 @@ from sqlalchemy import create_engine, MetaData
 import sqlalchemy
 from migrate.changeset.constraint import PrimaryKeyConstraint
 from geopandas import GeoDataFrame
-
+import pandas as pd
 
 class MunichData:
     engine = create_engine('postgresql://research:1234@34.142.109.94:5432/walcycdata')
     schema = 'production'
     crs = "EPSG:3857"
+    date = pd.to_datetime("today")
     @staticmethod
     def data_to_server(data_to_upload: GeoDataFrame,
                        columns_to_upload: list,

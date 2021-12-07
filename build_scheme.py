@@ -455,7 +455,8 @@ if __name__ == '__main__':
     type_to_remove = ['C', 'D', 'NT', 'S', 'T', 'U']
     engine = create_engine('postgresql://research:1234@34.142.109.94:5432/walcycdata')
     # dictionary to control which function to run
-    params = {'osm': [True, {'prepare_osm_data': False, 'osm_file': True, 'data_to_server': True}],
+    params = {'osm': [True, {'prepare_osm_data': False, 'osm_file': False, 'data_to_server': False,
+                             'find_the_opposite_roads': True}],
               'count': [False,
                         {'cycle_count': False, 'car_count': False, 'merge_files': True}],
               'incident': [False, {'prepare_incident': True, 'join_to_bike_network': False}],
@@ -468,18 +469,25 @@ if __name__ == '__main__':
         # Prepare OSM information
         local_params = params['osm'][1]
         if local_params['prepare_osm_data']:
+            # Here the data is downloaded from OSM server to the local machine
             OSM.prepare_osm_data().to_file("shp_files/inputs.gpkg", layer='openstreetmap_data', driver="GPKG")
         if local_params['osm_file']:
+            # The data is prepared for production
             print('create osm table')
             osm_df = gpd.read_file("shp_files/inputs.gpkg", layer='openstreetmap_data')
             cat_file = pd.read_csv('shp_files/cat.csv')
             OSM.osm_file_def(osm_df, cat_file).to_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network',
                                                        driver="GPKG")
+
+        osm_data = gpd.read_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network')
         if local_params['data_to_server']:
             print("upload osm data")
-            osm_data = gpd.read_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network')
             OSM.data_to_server(data_to_upload=osm_data, columns_to_upload=OSM.osm_column_names,
                                table_name='openstreetmap_road_network')
+        if local_params['find_the_opposite_roads']:
+            # The algorithm links two-way roads
+            OSM.find_the_opposite_roads(osm_gdf=osm_data).to_file("shp_files/two_ways.gpkg",
+                                                                  layer='osm_gdf', driver="GPKG")
 
     if params['count'][0]:
         local_params = params['count'][1]
@@ -555,7 +563,6 @@ if __name__ == '__main__':
 
     if params['data_to_server'][0]:
         local_params = params['data_to_server'][1]
-
 
         if local_params['bikes']:
             print("upload cycle_count_data")

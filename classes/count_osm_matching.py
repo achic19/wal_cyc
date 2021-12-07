@@ -4,7 +4,7 @@ import geopandas as gpd
 import numpy as np
 from shapely.geometry import Point
 from classes.munich import *
-
+from classes.osm import OSMAsObject
 
 class Matching:
     def __init__(self, osm_matching: GeoDataFrame, osm):
@@ -43,11 +43,14 @@ class RefineMatching(MunichData):
                  osm_data: GeoDataFrame):
         self.data = matching_data
         self.osm = osm_data.set_index('osm_id')
-        # Save the projection points in new file
-        self.points = GeoDataFrame(crs=RefineMatching.crs)
+
         # The following parameters will be used to populate the projection points list
-        self.pro_list = {'geometry': []}
+        self.pro_list = []
         self.cur_pnt_inx = 0
+        self.pro_pnt_gdf = GeoDataFrame()
+
+        # data to match for than  one osm object
+        self.osm_as_graph = OSMAsObject.create_osm_obj_from_local_machine()
 
     def refine(self):
         """
@@ -91,12 +94,15 @@ class RefineMatching(MunichData):
                 """
 
                 proj = list(osm_object.geometry.interpolate(osm_geometry.project(Point(pnt))).coords)[0]
-                if round(proj[0], 0) == round(osm_coordinates[ind][0], 0) and round(proj[1], 0) == round(
-                        osm_coordinates[ind][1], 0):
+                osm_pnt = osm_coordinates[ind]
+                if round(proj[0], 0) == round(osm_pnt[0], 0) and round(proj[1], 0) == round(
+                        osm_pnt[1], 0) and ((pnt[0] - osm_pnt[0]) ** 2 + (pnt[1] - osm_pnt[1]) ** 2) ** 0.5 > 50:
+                    # If the projection point is on the OSM end lines and the distance between the local point and
+                    # the OSM ends is greater than 50 meters, more work needs to be done.
                     return -3
                 else:
                     proj_index = self.cur_pnt_inx
-                    self.pro_list['geometry'].append(Point(proj))
+                    self.pro_list.append(Point(proj))
                     self.cur_pnt_inx += 1
                     return proj_index
 
@@ -110,9 +116,14 @@ class RefineMatching(MunichData):
                 # ToDo for multilinestring which will not be appear in the new osm data
                 return -4, -4, -4, -4
 
-        new_fields = ['start_point', 'osm_start_point', 'end_point', 'osm_end_point']
+        new_fields = ['start_osm_id', 'start_point_id', 'end_osm_id', 'end_point_id']
         print('refine')
         self.data[new_fields] = list(self.data.apply(find_finer_data_osm, axis=1))
+        # Update gdf with the new points
+        self.pro_pnt_gdf['geometry'] = self.pro_list
+        self.pro_pnt_gdf.reset_index(inplace=True)
+        self.pro_pnt_gdf.rename(columns={'index': 'pnt_id'}, inplace=True)
+        self.pro_pnt_gdf.crs = MunichData.crs
 
 
 if __name__ == '__main__':
@@ -120,10 +131,11 @@ if __name__ == '__main__':
 
     os.chdir(r'D:\Users\Technion\Sagi Dalyot - AchituvCohen\WalCycData\shared_project')
     my_matching_data = gpd.read_file("shp_files/matching_files.gpkg", layer='count_osm_matching', driver="GPKG")
-    my_osm_data = gpd.read_file("shp_files/two_ways.gpkg", layer='osm_gdf')
+    my_osm_data = gpd.read_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network')
     my_refine_data = RefineMatching(matching_data=my_matching_data, osm_data=my_osm_data)
     my_refine_data.refine()
     my_refine_data.data.to_file("shp_files/matching_files.gpkg", layer='refine_matching', driver="GPKG")
+    my_refine_data.pro_pnt_gdf.to_file("shp_files/matching_files.gpkg", layer='refine_matching_pnts', driver="GPKG")
     # matching_data = gpd.read_file('shp_files/matching_files.gpkg', layer='count_osm_matching')
     # my_osm_data = gpd.read_file("shp_files/two_ways.gpkg", layer='osm_gdf')
     # my_matching = Matching(matching_data, my_osm_data)
