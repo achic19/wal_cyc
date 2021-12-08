@@ -133,12 +133,12 @@ class OSM(MunichData):
             results = []
             for row_temp in group.iterrows():
                 row = row_temp[1]
-                if abs((abs(row['azimuth_1'] - row['azimuth_2']) - 180)) < 15 and row['area'] > 20:
+                if abs((abs(row['azimuth_1'] - row['azimuth_2']) - 180)) < 35 and row['area'] > 30:
                     results.append(row['osm_id_2'])
             return results
         else:
             row = group.iloc[0]
-            if abs((abs(row['azimuth_1'] - row['azimuth_2']) - 180)) < 15 and row['area'] > 20:
+            if abs((abs(row['azimuth_1'] - row['azimuth_2']) - 180)) < 35 and row['area'] > 30:
                 return row['osm_id_2']
             else:
                 return []
@@ -149,11 +149,13 @@ class OSMAsObject(MunichData):
     def __init__(self, area):
         print('OSMAsObject')
         print('_download_osm_data')
-        graph = ox.graph_from_polygon(area, network_type='all')
-        print('_project_graph_to_3857')
-        self.graph_pr = ox.project_graph(graph)
-        nodes_coor = [Point(f['x'], f['y']) for f in self.graph_pr.nodes.data()._nodes.values()]
-        self.gdp_pnt = gpd.GeoDataFrame(geometry=nodes_coor, crs=OSMAsObject.crs)
+        self.graph = ox.graph_from_polygon(area, network_type='all')
+        print('_build gdp points file')
+        nodes_coor = [Point(f['x'], f['y']) for f in self.graph.nodes.data()._nodes.values()]
+        self.gdp_pnt = gpd.GeoDataFrame(geometry=nodes_coor, crs="EPSG:4326")
+        self.gdp_pnt['id'] = [f for f in self.graph.nodes.data()._nodes.keys()]
+        self.gdp_pnt.set_index('id', inplace=True)
+        self.gdp_pnt.to_crs(OSMAsObject.crs, inplace=True)
         with open('OSMAsObject.pkl', 'wb') as osm_as_object:
             print('_write_to_disk_with_pickle')
             pickle.dump(self, osm_as_object)
