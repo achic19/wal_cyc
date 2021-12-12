@@ -455,14 +455,14 @@ if __name__ == '__main__':
     type_to_remove = ['C', 'D', 'NT', 'S', 'T', 'U']
     engine = create_engine('postgresql://research:1234@34.142.109.94:5432/walcycdata')
     # dictionary to control which function to run
-    params = {'osm': [True, {'prepare_osm_data': False, 'osm_file': False, 'data_to_server': False,
-                             'find_the_opposite_roads': True}],
+    params = {'osm': [True, {'prepare_osm_data': True, 'osm_file': True, 'data_to_server': False,
+                             'find_the_opposite_roads': False}],
               'count': [False,
                         {'cycle_count': False, 'car_count': False, 'merge_files': True}],
               'incident': [False, {'prepare_incident': True, 'join_to_bike_network': False}],
               'count_osm': [False, {'prepare_overlay': False, 'matching': True}],
               'analysis': False,
-              'data_to_server': [True, {'osm': True, 'bikes': False, 'cars': False, 'incidents': False,
+              'data_to_server': [False, {'osm': True, 'bikes': False, 'cars': False, 'incidents': False,
                                         'combined_network': False}]}
 
     if params['osm'][0]:
@@ -470,7 +470,11 @@ if __name__ == '__main__':
         local_params = params['osm'][1]
         if local_params['prepare_osm_data']:
             # Here the data is downloaded from OSM server to the local machine
-            OSM.prepare_osm_data().to_file("shp_files/inputs.gpkg", layer='openstreetmap_data', driver="GPKG")
+            lines, pnts = OSM.prepare_osm_data()
+            lines.to_file("shp_files/inputs.gpkg", layer='openstreetmap_data',
+                                           driver="GPKG")
+            pnts.to_file("shp_files/inputs.gpkg", layer='openstreetmap_data_nodes',
+                                           driver="GPKG")
         if local_params['osm_file']:
             # The data is prepared for production
             print('create osm table')

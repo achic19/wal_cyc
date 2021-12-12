@@ -1,4 +1,4 @@
-from geopandas import GeoDataFrame
+from geopandas import GeoDataFrame, GeoSeries
 import math
 import geopandas as gpd
 import numpy as np
@@ -53,6 +53,11 @@ class RefineMatching(MunichData):
 
         # data to match for than  one osm object
         self.osm_as_graph = OSMAsObject.create_osm_obj_from_local_machine()
+        self.osm_as_graph.gdp_pnt.set_index('id', inplace=True, drop=True)
+        # Objects related to the matching
+        self.ind_pnt = int
+        self.list_of_osm_obj = []
+        self.osm_obj = GeoSeries()
 
     def refine(self):
         """
@@ -85,47 +90,18 @@ class RefineMatching(MunichData):
             except NotImplementedError:
                 # ToDo for multilinestring which will not be appear in the new local network data
                 return -4, -4, -4, -4
-
-            def project_pnt_osm_obj(pnt: tuple, pnt_loc: str, ind: int):
-                """
-                Project the point onto the osm object.
-                More work is required if the projection points are the ends of OSM objects.
-                :param pnt: pnt to project
-                :param pnt_loc:
-                string that retain information about the point location on the local object (first or last)
-                :param ind:pnt index in pnt list of local line object
-                :return:
-                """
-                # osm_pnt store the first or last point of osm string line object
-                osm_pnt = osm_coordinates[ind]
-                local_pnt_shpy = Point(pnt)
-                osm_pnt_shpy = Point(osm_pnt)
-                proj = RefineMatching.__make_projection(osm_geometry, local_pnt_shpy)
-
-                # The projection might be executed against a different OSM object
-                # if the projection point equals osm_pnt and the distance is more than 100 meters
-                if round(proj[0], 0) == round(osm_pnt[0], 0) and round(proj[1], 0) == round(
-                        osm_pnt[1], 0) and ((pnt[0] - osm_pnt[0]) ** 2 + (pnt[1] - osm_pnt[1]) ** 2) ** 0.5 > 100:
-                    res = self.__long_local_object(local_pnt_shpy, osm_pnt_shpy, pnt_loc)
-                    if res == -1:
-                        # no  other osm object is found
-                        return self.__update_points_list(Point(proj))
-                    else:
-                        return res
-                else:
-                    return self.__update_points_list(Point(proj))
-
             try:
-                osm_geometry = osm_object.geometry
-                osm_coordinates = list(osm_geometry.coords)
+                self.osm_obj = osm_object
+                # find more osm
+                self.__project_pnt_osm_obj(pnts_list[0], 0)
+                self.list_of_osm_obj.reverse()
+                firsts_osm = self.list_of_osm_obj
+                first_proj = self.ind_pnt
+                self.osm_obj = osm_object
+                self.__project_pnt_osm_obj(pnts_list[-1], -1)
+                lasts_osm = self.list_of_osm_obj
+                last_proj = self.ind_pnt
 
-                # first and last projections could be just points or tuple that include also osm_id names object names
-                first_proj = project_pnt_osm_obj(pnts_list[0], 'first', 0)
-                last_proj = project_pnt_osm_obj(pnts_list[-1], 'last', -1)
-                firsts_osm = first_proj[0] if isinstance(first_proj, tuple) else row.osm_walcycdata_id
-                lasts_osm = last_proj[0] if isinstance(last_proj, tuple) else row.osm_walcycdata_id
-                first_proj = first_proj[1] if isinstance(first_proj, tuple) else first_proj
-                last_proj = last_proj[1] if isinstance(last_proj, tuple) else last_proj
                 return firsts_osm, first_proj, lasts_osm, last_proj
             except NotImplementedError:
                 # ToDo for multilinestring which will not be appear in the new osm data
@@ -143,7 +119,34 @@ class RefineMatching(MunichData):
             lambda x: ','.join(map(str, x)) if isinstance(x, list) else str(x))
         self.pro_pnt_gdf.crs = MunichData.crs
 
-    def __long_local_object(self, local_pnt_shpy: Point, osm_pnt_shpy: Point, pnt_loc: str):
+    def __project_pnt_osm_obj(self, pnt: tuple, ind: int):
+        """
+        Project the point onto the osm object.
+        More work is required if the projection points are the ends of OSM objects.
+        :param pnt: pnt to project
+        :param pnt_loc:
+        string that retain information about the point location on the local object (first or last)
+        :param ind:pnt index in pnt list of local line object
+        :return:
+        """
+        # osm_pnt store the first or last point of osm string line object
+        osm_geometry = self.osm_obj.geometry
+        osm_coordinates = list(osm_geometry.coords)
+        osm_pnt = osm_coordinates[ind]
+        local_pnt_shpy = Point(pnt)
+        osm_pnt_shpy = Point(osm_pnt)
+
+        self.list_of_osm_obj = [self.osm_obj.name]
+        proj = RefineMatching.__make_projection(osm_geometry, local_pnt_shpy)
+        # The projection might be executed against a different OSM object
+        # if the projection point equals osm_pnt and the distance is more than 100 meters
+        if round(proj[0], 0) == round(osm_pnt[0], 0) and round(proj[1], 0) == round(
+                osm_pnt[1], 0) and ((pnt[0] - osm_pnt[0]) ** 2 + (pnt[1] - osm_pnt[1]) ** 2) ** 0.5 > 100:
+            self.__long_local_object(local_pnt_shpy, osm_pnt_shpy, proj)
+        else:
+            self.__update_points_list(Point(proj))
+
+    def __long_local_object(self, local_pnt_shpy: Point, osm_pnt_shpy: Point, proj: list):
         """
         If the projection point is on the OSM end lines and the distance between the local point and
         the OSM ends is greater than 100 meters, more work needs to be done.
@@ -153,76 +156,49 @@ class RefineMatching(MunichData):
         :return:
         """
 
-        # find the nearest node on the graph to teh local_pnt
-        pnts_on_graph = self.osm_as_graph.gdp_pnt.sindex.nearest([local_pnt_shpy, osm_pnt_shpy],
+        # find the nearest node on the graph to the local_pnt
+        pnts_on_graph = self.osm_as_graph.gdp_pnt.sindex.nearest([osm_pnt_shpy],
                                                                  return_distance=True, return_all=False)
-        indices_on_tree = pnts_on_graph[0][1]
-        local_inx = indices_on_tree[0]
-        osm_inx = indices_on_tree[1]
-        if local_inx == osm_inx:
-            # if the local_inx (source) equal to osm_inx (target), return osm point
-            return -1
-        # Find source and the destination points
-        if pnt_loc == 'first':
-            source = self.osm_as_graph.gdp_pnt.iloc[local_inx].name
-            des = self.osm_as_graph.gdp_pnt.iloc[osm_inx].name
+        osm_inx = pnts_on_graph[0][1][0]
+        pnt_osm_in_graph = self.osm_as_graph.gdp_pnt.iloc[osm_inx].name
+        next_lines_options = self.osm_as_graph.graph.edges(pnt_osm_in_graph)
+
+        # Restore the geometries of the examined stringline
+        stringline_list = []
+        for edge in next_lines_options:
+            osm_id_obj = self.osm_as_graph.graph.edges[edge[0], edge[1]]['osmid']
+            stringline_list.append(self.osm.loc[osm_id_obj])
+
+        # Find the nearest one
+        testgdb = GeoDataFrame(stringline_list)
+        res_nearest_ind = testgdb.sindex.nearest([local_pnt_shpy], return_distance=True,
+                                                 return_all=False)[0][1][0]
+        res_nearest_osm_id = stringline_list[res_nearest_ind].name
+        # if it is still same points:
+        if res_nearest_osm_id == self.osm_obj.name:
+            self.__update_points_list(Point(proj))
+            return
+        # the code continues to check more relevant osm segments to the current local segment
+        self.list_of_osm_obj.append(res_nearest_osm_id)
+        self.osm_obj = self.osm.loc[res_nearest_osm_id]
+        self.__find_more_edges(local_pnt_shpy)
+
+    def __find_more_edges(self, local_pnt_shpy):
+
+        proj = RefineMatching.__make_projection(self.osm_obj.geometry, local_pnt_shpy)
+        pnt = list(local_pnt_shpy.coords)[0]
+        # Which point to check
+        osm_coordinates = list(self.osm_obj.geometry.coords)
+        osm_pnt_0 = Point(osm_coordinates[0])
+        osm_pnt_1 = Point(osm_coordinates[-1])
+        osm_pnt_shpy = osm_pnt_0 if osm_pnt_0.distance(local_pnt_shpy) < osm_pnt_1.distance(
+            local_pnt_shpy) else osm_pnt_1
+        osm_pnt = list(osm_pnt_shpy.coords)[0]
+        if round(proj[0], 0) == round(osm_pnt[0], 0) and round(proj[1], 0) == round(
+                osm_pnt[1], 0) and ((pnt[0] - osm_pnt[0]) ** 2 + (pnt[1] - osm_pnt[1]) ** 2) ** 0.5 > 100:
+            self.__long_local_object(local_pnt_shpy, osm_pnt_shpy, proj)
         else:
-            source = self.osm_as_graph.gdp_pnt.iloc[osm_inx].name
-            des = self.osm_as_graph.gdp_pnt.iloc[local_inx].name
-        # Calculate the shortest path
-        shortest = shortest_path(self.osm_as_graph.graph, source=source, target=des, weight='length')
-        # Build an object that store all the equivalent osm objects to the local object and find the projection point
-        list_of_osm_obj = []
-        proj = -2
-        k = 0
-        my_len = len(shortest) - 2
-        if pnt_loc == 'first':
-            # FInd the projection point
-            list_of_osm_obj, proj = self.__proj_for_ended_cases(0, 1, shortest, local_pnt_shpy, list_of_osm_obj)
-            k += 1
-            my_len = len(shortest) - 1
-        # Go over all the shortest points to find all the osm objects matching the local object
-
-        while k < my_len:
-            osm_ogj = self.osm_as_graph.graph.edges[shortest[k], shortest[k + 1], 0]['osmid']
-            if isinstance(osm_ogj, list):
-                list_of_osm_obj.extend(osm_ogj)
-            else:
-                list_of_osm_obj.append(osm_ogj)
-            k = k + 1
-
-        if pnt_loc == 'last':
-            list_of_osm_obj, proj = self.__proj_for_ended_cases(-2, -1, shortest, local_pnt_shpy, list_of_osm_obj)
-
-        return list_of_osm_obj, self.__update_points_list(Point(proj))
-
-    def __proj_for_ended_cases(self, ind_1: int, ind_2: int, shortest: list, local_pnt_shpy: Point,
-                               list_of_osm_obj: list):
-        """
-        Project the local_pnt_shpy object into the nearest stringline
-            (the first line or the last line that can be restored from the shortest object)
-            based on the indices (ind_1 and ind_2).
-        :param ind_1:0/-2
-        :param ind_2:1/-1
-        :param shortest: keep the points that construct the shortest route
-         from which the code can restore the shortest route's edges
-        :param local_pnt_shpy: project this point to the correct stringline
-        :param list_of_osm_obj: append the projection point into this list
-        :return:
-        """
-        osm_ogj = self.osm_as_graph.graph.edges[shortest[ind_1], shortest[ind_2], 0]['osmid']
-        if isinstance(osm_ogj, list):
-            # in case of more than one object select the nearest one
-            test_osm_jdb = self.osm.loc[osm_ogj]
-            nearest = test_osm_jdb.sindex.nearest([local_pnt_shpy], return_distance=True,
-                                                  return_all=False)
-            osm_ogj = test_osm_jdb.iloc[nearest[0][1][0]].name
-            list_of_osm_obj.append(osm_ogj)
-        else:
-            list_of_osm_obj.append(osm_ogj)
-        proj = RefineMatching.__make_projection(self.osm.loc[osm_ogj].geometry,
-                                                local_pnt_shpy)
-        return list_of_osm_obj, proj
+            self.__update_points_list(Point(proj))
 
     def __update_points_list(self, proj: Point):
         """
@@ -230,13 +206,12 @@ class RefineMatching(MunichData):
         :param proj:
         :return:
         """
-        proj_index = self.cur_pnt_inx
+        self.ind_pnt = self.cur_pnt_inx
         self.pro_list.append(proj)
         self.cur_pnt_inx += 1
-        return proj_index
 
     @staticmethod
-    def __make_projection(line: LineString, point: Point):
+    def __make_projection(line: LineString, point: Point) -> list:
         return list(line.interpolate(line.project(point)).coords)[0]
 
 

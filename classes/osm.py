@@ -8,6 +8,7 @@ import numpy as np
 from math import degrees, atan2
 from classes.munich import *
 import pickle
+import networkx as nx
 
 
 class OSM(MunichData):
@@ -40,12 +41,18 @@ class OSM(MunichData):
             elif element["type"] == "way":
                 ways[element['id']] = dict([tag for tag in element['tags'].items() if tag[0] in useful_tags])
                 ways[element['id']]['geometry'] = LineString([nodes_list[id_loc] for id_loc in element['nodes']])
+                ways[element['id']]['from'] = element['nodes'][0]
+                ways[element['id']]['to'] = element['nodes'][-1]
 
         # Convert the ways dictionary into a dataframe
+        print('_create and save graph ')
         edges_shp = GeoDataFrame(ways.values(), index=ways.keys(), crs="EPSG:4326")
         edges_shp['osmid'] = ways.keys()
+
         print("finish prepare_osm_data ")
-        return edges_shp.to_crs(OSM.crs)
+        osm_as_graph = OSMAsObject(nodes_list, edges_shp)
+
+        return edges_shp.to_crs(OSM.crs), osm_as_graph.gdp_pnt
 
     @staticmethod
     def osm_file_def(osm_df: GeoDataFrame, cat_file: pd.DataFrame):
@@ -146,24 +153,22 @@ class OSM(MunichData):
 
 class OSMAsObject(MunichData):
 
-    def __init__(self, area):
-        print('OSMAsObject')
-        print('_download_osm_data')
-        self.graph = ox.graph_from_polygon(area, network_type='all')
-        print('_build gdp points file')
-        nodes_coor = [Point(f['x'], f['y']) for f in self.graph.nodes.data()._nodes.values()]
-        self.gdp_pnt = gpd.GeoDataFrame(geometry=nodes_coor, crs="EPSG:4326")
-        self.gdp_pnt['id'] = [f for f in self.graph.nodes.data()._nodes.keys()]
-        self.gdp_pnt.set_index('id', inplace=True)
-        self.gdp_pnt.to_crs(OSMAsObject.crs, inplace=True)
-        with open('OSMAsObject.pkl', 'wb') as osm_as_object:
-            print('_write_to_disk_with_pickle')
-            pickle.dump(self, osm_as_object)
+    def __init__(self, nodes_list, edges_shp):
+        print("__gdp_pnt ")
+        nodes_coor = [Point(f[0], f[1]) for f in nodes_list.values()]
+        self.gdp_pnt = gpd.GeoDataFrame(nodes_list.keys(), geometry=nodes_coor, crs="EPSG:4326").to_crs(OSM.crs)
+        self.gdp_pnt.rename(columns={0: 'id'}, inplace=True)
+
+        # save the osm data as graph
+        self.graph = nx.from_pandas_edgelist(edges_shp, 'from', 'to', edge_attr='osmid')
+        with open('OSMAsOsm.pkl', 'wb') as osm_as_graph:
+            print('__write_to_disk_with_pickle')
+            pickle.dump(self, osm_as_graph)
 
     @staticmethod
     def create_osm_obj_from_local_machine():
         print('_load_osm_as_object')
-        with open('OSMAsObject.pkl', 'rb') as osm_as_object:
+        with open('OSMAsOsm.pkl', 'rb') as osm_as_object:
             return pickle.load(osm_as_object)
 
 
@@ -171,8 +176,13 @@ if __name__ == '__main__':
     import os
 
     os.chdir(r'D:\Users\Technion\Sagi Dalyot - AchituvCohen\WalCycData\shared_project')
-    my_area = gpd.read_file(r'shp_files\munich_4326_large.shp')['geometry'][0]
-    OSMAsObject(area=my_area)
+    lines, pnts = OSM.prepare_osm_data()
+    lines.to_file("shp_files/inputs.gpkg", layer='openstreetmap_data',
+                  driver="GPKG")
+    pnts.to_file("shp_files/inputs.gpkg", layer='openstreetmap_data_nodes',
+                 driver="GPKG")
+    # my_area = gpd.read_file(r'shp_files\munich_4326_large.shp')['geometry'][0]
+    # OSMAsObject(area=my_area)
     # osm_data = gpd.read_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network')
     # OSM.find_the_opposite_roads(osm_gdf=osm_data).to_file("shp_files/two_ways.gpkg",
     #                                                       layer='osm_gdf', driver="GPKG")
