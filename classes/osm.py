@@ -15,7 +15,8 @@ class OSM(MunichData):
     # Data
 
     osm_column_names = ['walcycdata_id', 'walcycdata_is_valid', 'walcycdata_last_modified', 'osm_id', 'osm_fclass',
-                        'osm_name', 'osm_oneway', 'osm_maxspeed', 'osm_layer', 'osm_bridge', 'osm_tunnel', 'geometry']
+                        'osm_name', 'osm_oneway', 'osm_maxspeed', 'osm_layer', 'osm_bridge', 'osm_tunnel',
+                        'cyclecount_count', 'carcount_count', 'geometry']
 
     @staticmethod
     def prepare_osm_data():
@@ -103,6 +104,92 @@ class OSM(MunichData):
         return osm_df.drop('index', axis=1)
 
     @staticmethod
+    def statistic(two_ways_db: GeoDataFrame):
+
+        def __stat_by_highway(group):
+            print(group.name)
+            len_highway = len(group)
+            not_found = len(group[group['pair'] == str(-1)])
+            not_found_percentage = not_found / len_highway * 100
+            found = len_highway - not_found
+            found_percentage = found / len_highway * 100
+            rep[group.name] = [len_highway, found, found_percentage, not_found, not_found_percentage]
+
+            # calculate the number of one-ways roads
+
+        one_way = two_ways_db[two_ways_db['osm_oneway'] == 1]
+        len_two_ways = len(two_ways_db)
+        len_one_way = len(one_way)
+        print("There ara {} one-ways roads which is {}%".format(len_one_way, len_one_way / len_two_ways * 100))
+
+        # Dictionary to solve the results
+        rep = {}
+        one_way.groupby('highway').apply(__stat_by_highway)
+        res = pd.DataFrame(index=rep.keys(), data=rep.values(),
+                           columns=['count', 'found_count', 'found_count_percentage', 'not found_count',
+                                    'not found_count_percentage'])
+        print(res)
+        file_name = 'stat.csv'
+        res.to_csv(file_name)
+
+    @staticmethod
+    def from_local_to_osm(osm_network: GeoDataFrame, local_matching_network: GeoDataFrame) -> GeoDataFrame:
+        '''
+        This method update osm network with car and bike countings
+        :param osm_network:
+        :param local_matching_network:
+        :return:
+        '''
+        # make sure osm_id is the index
+        osm_network.set_index('osm_id', inplace=True)
+        # form str  to int list in local_matching_network
+        local_matching_network['start_osm_id'] = local_matching_network['start_osm_id'].apply(
+            lambda x: [int(i) for i in x.split(',')])
+        local_matching_network['end_osm_id'] = local_matching_network['end_osm_id'].apply(
+            lambda x: [int(i) for i in x.split(',')])
+        # null to zero
+        local_matching_network['carcount_count'] = local_matching_network['carcount_count'].fillna(0)
+        #  Use only rows from local_matching_network with counting and with matching OSM,
+        local_matching_network = local_matching_network[
+            (local_matching_network['carcount_count'] > 0) & (local_matching_network['cyclecount_count'] > 0) & (
+                    local_matching_network['osm_walcycdata_id'] != -1)]
+        # Add four new two columns sum and time
+        osm_network[['sum_count_car', 'num_count_car', 'sum_count_cycle', 'num_count_cycle']] = 0
+
+        # ToDo add another row for incidents counting
+        def calculate_counting(row):
+            # The method add count information based on the date in row
+
+            def count_per_row(osm_id):
+                # Update count for the given osm_id
+                if row['carcount_count'] > 0:
+                    osm_network.at[osm_id, 'sum_count_car'] += row['carcount_count']
+                    osm_network.at[osm_id, 'num_count_car'] += 1
+                if row['cyclecount_count'] > 0:
+                    osm_network.at[osm_id, 'sum_count_cycle'] += row['cyclecount_count']
+                    osm_network.at[osm_id, 'num_count_cycle'] += 1
+
+            osm_walcycdata_id = row['osm_walcycdata_id']
+            # if start_point_id is -2 , add the osm_walcycdata_id
+            if row['start_point_id'] == -2:
+                count_per_row(osm_walcycdata_id)
+            else:
+                # take all the values from start_osm_id and end_osm_id and remove osm_walcycdata_id and for all
+                list_osm_ids = row['start_osm_id']
+                list_osm_ids.extend(row['end_osm_id'])
+                list_osm_ids.remove(osm_walcycdata_id)
+                [count_per_row(item) for item in list_osm_ids]
+
+        # loop over each filtered matching network:
+        local_matching_network.apply(calculate_counting, axis=1)
+        # calculate avarage
+        osm_network['cyclecount_count'] = osm_network['sum_count_car'] / osm_network['num_count_car']
+        osm_network['carcount_count'] = osm_network['sum_count_cycle'] / osm_network['num_count_cycle']
+        osm_network[['cyclecount_count', 'carcount_count']] = osm_network[
+            ['cyclecount_count', 'carcount_count']].fillna(0)
+        return osm_network
+
+    @staticmethod
     def find_the_opposite_roads(osm_gdf: GeoDataFrame):
         """
 
@@ -176,13 +263,7 @@ if __name__ == '__main__':
     import os
 
     os.chdir(r'D:\Users\Technion\Sagi Dalyot - AchituvCohen\WalCycData\shared_project')
-    lines, pnts = OSM.prepare_osm_data()
-    lines.to_file("shp_files/inputs.gpkg", layer='openstreetmap_data',
-                  driver="GPKG")
-    pnts.to_file("shp_files/inputs.gpkg", layer='openstreetmap_data_nodes',
-                 driver="GPKG")
-    # my_area = gpd.read_file(r'shp_files\munich_4326_large.shp')['geometry'][0]
-    # OSMAsObject(area=my_area)
-    # osm_data = gpd.read_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network')
-    # OSM.find_the_opposite_roads(osm_gdf=osm_data).to_file("shp_files/two_ways.gpkg",
-    #                                                       layer='osm_gdf', driver="GPKG")
+    refine_matching = gpd.read_file("shp_files/matching_files.gpkg", layer='refine_matching', driver="GPKG")
+    my_osm_data = gpd.read_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network')
+    res = OSM.from_local_to_osm(my_osm_data, refine_matching)
+    res.to_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network2')

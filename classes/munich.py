@@ -4,11 +4,13 @@ from migrate.changeset.constraint import PrimaryKeyConstraint
 from geopandas import GeoDataFrame
 import pandas as pd
 
+
 class MunichData:
     engine = create_engine('postgresql://research:1234@34.142.109.94:5432/walcycdata')
     schema = 'production'
     crs = "EPSG:3857"
     date = pd.to_datetime("today")
+
     @staticmethod
     def data_to_server(data_to_upload: GeoDataFrame,
                        columns_to_upload: list,
@@ -27,6 +29,9 @@ class MunichData:
         print('_work only with data in columns_to_upload')
         data_to_upload = data_to_upload[columns_to_upload]
 
+        # update the last time data were changed
+        print('_update the last time data were changed')
+        data_to_upload['walcycdata_last_modified'] = MunichData.date
         # upload data
         print('_upload data')
         data_to_upload.to_postgis(name=table_name, con=MunichData.engine, schema=MunichData.schema,
@@ -45,4 +50,5 @@ class MunichData:
         for col in columns_to_upload:
             col = sqlalchemy.Column(col, metadata)
             col.alter(nullable=False, table=my_table)
+
 

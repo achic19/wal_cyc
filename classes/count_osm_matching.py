@@ -6,18 +6,30 @@ from shapely.geometry import Point, LineString
 from classes.munich import *
 from classes.osm import OSMAsObject
 from networkx.algorithms.shortest_paths import shortest_path
+import networkx as nx
 
 
 class Matching:
-    def __init__(self, osm_matching: GeoDataFrame, osm):
+    def __init__(self, local_matching_osm: GeoDataFrame, osm: GeoDataFrame):
+        """
+
+        :param local_matching_osm:  data on local network
+        :param osm: The OSM network to work on
+        """
         print("Matching")
-        self.osm_matching = osm_matching
+        self.osm_matching = local_matching_osm
         self.osm = osm
+
+
+class RoadMatching(Matching):
+    def __init__(self, local_matching_osm: GeoDataFrame, osm: GeoDataFrame):
+        super().__init__(local_matching_osm, osm)
+        self.osm['pair'] = self.osm['pair'].apply(lambda x: [int(i) for i in x.split(',')])
 
     def update_by_direction(self):
         print("_update_by_direction")
         self.osm_matching['osm_walcycdata_id'] = self.osm_matching.apply(
-            lambda row: self.swap_directions(row[['azimuth', 'osm_walcycdata_id']]), axis=1)
+            lambda row: self.swap_directions(row[['azimuth', 'osm_walcycdata_id', 'geometry']]), axis=1)
 
     def swap_directions(self, row):
         """
@@ -29,14 +41,105 @@ class Matching:
         if row['osm_walcycdata_id'] == -1:
             return -1
         osm_object = self.osm[self.osm['osm_id'] == row['osm_walcycdata_id']]
+        pair = osm_object['pair'].values[0]
         # no opposite side to the OSM object
-        if osm_object['pair'].isnull().any():
-            return -1
+        if pair[0] == -1:
+            return row['osm_walcycdata_id']
         if abs(row.azimuth - osm_object.azimuth.values[0]) > 30:
             # Select the opposite direction
-            return osm_object['pair'].values[0]
+            if len(pair) == 1:
+                return pair[0]
+            else:
+                # if there are more than one in the opposite direction select the nearest one
+                return self.__find_the_nearest(pair, row)
         else:
             return row['osm_walcycdata_id']
+
+    def __find_the_nearest(self, lines_options, row):
+        stringline_list = []
+        for edge in lines_options:
+            stringline_list.append(self.osm[self.osm['osm_id'] == edge].geometry.values[0])
+
+        # Find the nearest one
+        testgdb = GeoDataFrame(geometry=stringline_list)
+        res_nearest_ind = testgdb.sindex.nearest(row.geometry, return_distance=True,
+                                                 return_all=False)[0][1][0]
+        return lines_options[res_nearest_ind]
+
+
+class IncidentsMatching(Matching):
+    def __init__(self, local_matching_osm: GeoDataFrame, osm: GeoDataFrame):
+        print('_matching_incidents')
+        super().__init__(local_matching_osm, osm)
+        # delete from osm dataset highway = steps and footway
+        self.osm = self.osm[(self.osm['highway'] != 'footway') & (self.osm['highway'] != 'steps')]
+
+    def overlay_count_osm(self, osm_columns: list, local_columns: list) -> dict:
+        """
+        This function calculate between osm entities and local network entities
+        :param local_columns: fields of local network to save while the matching process
+        :param osm_columns: fields of osm network to save while the matching process
+        :return: list of all the gis files been created during implementation of this stage
+        """
+
+        # and calculate the overlay intersection between the two.
+        print('__osm_buffer')
+        osm_buffer = GeoDataFrame(self.osm[osm_columns],
+                                  geometry=self.osm.geometry.buffer(15, cap_style=2), crs=MunichData.crs)
+
+        print('__count_buffer')
+        count_buffer = gpd.GeoDataFrame(self.osm_matching[local_columns], crs=MunichData.crs,
+                                        geometry=self.osm_matching.geometry.buffer(15))
+
+        print('__overlay')
+        overlay = count_buffer.overlay(osm_buffer, how='intersection')
+        # Calculate the percentage field
+        overlay['areas'] = overlay.area
+        count_buffer['areas'] = count_buffer.area
+        # The index column in the overlay layer contains the id of the count entity,
+        # therefore in order to calculate the rational area between the overlay polygon and the corresponding polygon,
+        # the index field becomes the index. In order to save the percentage results,
+        # the table is sorted by index and area and then the index is reset.
+        return {'overlay': overlay, 'osm_buffer': osm_buffer,
+                'count_buffer': count_buffer}
+
+    def map_matching(self, overlay: GeoDataFrame, groupby_field: str):
+        """
+        map between the local network to the osm network based on the largest overlay between two entities
+        :param overlay: polygons of overlay
+        :param groupby_field:
+        :return:
+        """
+        print('_start map matching')
+        print('__find the best matching')
+        # for each count object return the osm id with the larger overlay with him
+        matching_info = overlay.groupby(groupby_field).apply(IncidentsMatching.__find_optimal_applicant)
+        print('__finish the best matching')
+        matching_info = matching_info[matching_info.notna()]
+        # update cycle count data with the corresponding osm id
+        matching_info.sort_index(inplace=True)
+
+        self.osm_matching.set_index(groupby_field, drop=False, inplace=True)
+        self.osm_matching.sort_index(inplace=True)
+        self.osm_matching['osm_walcycdata_id'] = -1
+        self.osm_matching['osm_walcycdata_id'][self.osm_matching[groupby_field].isin(matching_info[groupby_field])] = \
+            matching_info['osm_id']
+        self.osm_matching.reset_index(drop=True, inplace=True)
+        print('_finish map matching')
+
+    @staticmethod
+    def __find_optimal_applicant(group):
+        """
+        By analyzing several conditions, this function finds the best candidates out of all the options:
+        1. The highest in the hierarchy should be the first ti check
+        2. Then these with the largest overlay should be chosen
+        :param group: group of applicants (osm entities)
+        :return:
+        """
+        if len(group) > 1:
+            group.sort_values(['areas'], ascending=False, inplace=True)
+            return group.iloc[0]
+        return group.iloc[0]
 
 
 class RefineMatching(MunichData):
@@ -114,10 +217,12 @@ class RefineMatching(MunichData):
         self.pro_pnt_gdf['geometry'] = self.pro_list
         self.pro_pnt_gdf.reset_index(inplace=True)
         self.pro_pnt_gdf.rename(columns={'index': 'pnt_id'}, inplace=True)
-        # ToDo make sure it is working this way
-        self.pro_pnt_gdf[['start_osm_id', 'end_osm_id']] = self.pro_pnt_gdf[['start_osm_id', 'end_osm_id']].apply(
-            lambda x: ','.join(map(str, x)) if isinstance(x, list) else str(x))
         self.pro_pnt_gdf.crs = MunichData.crs
+
+        self.data['start_osm_id'] = self.data['start_osm_id'].apply(
+            lambda x: ','.join(map(str, x)) if isinstance(x, list) else str(x))
+        self.data['end_osm_id'] = self.data['end_osm_id'].apply(
+            lambda x: ','.join(map(str, x)) if isinstance(x, list) else str(x))
 
     def __project_pnt_osm_obj(self, pnt: tuple, ind: int):
         """
@@ -141,7 +246,7 @@ class RefineMatching(MunichData):
         # The projection might be executed against a different OSM object
         # if the projection point equals osm_pnt and the distance is more than 100 meters
         if round(proj[0], 0) == round(osm_pnt[0], 0) and round(proj[1], 0) == round(
-                osm_pnt[1], 0) and ((pnt[0] - osm_pnt[0]) ** 2 + (pnt[1] - osm_pnt[1]) ** 2) ** 0.5 > 100:
+                osm_pnt[1], 0) and ((pnt[0] - osm_pnt[0]) ** 2 + (pnt[1] - osm_pnt[1]) ** 2) ** 0.5 > 50:
             self.__long_local_object(local_pnt_shpy, osm_pnt_shpy, proj)
         else:
             self.__update_points_list(Point(proj))
@@ -157,11 +262,16 @@ class RefineMatching(MunichData):
         """
 
         # find the nearest node on the graph to the local_pnt
-        pnts_on_graph = self.osm_as_graph.gdp_pnt.sindex.nearest([osm_pnt_shpy],
-                                                                 return_distance=True, return_all=False)
-        osm_inx = pnts_on_graph[0][1][0]
-        pnt_osm_in_graph = self.osm_as_graph.gdp_pnt.iloc[osm_inx].name
-        next_lines_options = self.osm_as_graph.graph.edges(pnt_osm_in_graph)
+
+        pnt_osm_in_graph = self.__find_point_name_on_the_graph(osm_pnt_shpy)
+        try:
+            next_lines_options = self.osm_as_graph.graph.edges(pnt_osm_in_graph)
+        except nx.exception.NetworkXError:
+            # in case of point not on the graph, it should be deleted and than other point will be
+            print('point {} not not in graph therefore will be deleted'.format(pnt_osm_in_graph))
+            self.osm_as_graph.gdp_pnt.drop(self.osm_as_graph.gdp_pnt.loc[pnt_osm_in_graph].name, inplace=True)
+            pnt_osm_in_graph = self.__find_point_name_on_the_graph(osm_pnt_shpy)
+            next_lines_options = self.osm_as_graph.graph.edges(pnt_osm_in_graph)
 
         # Restore the geometries of the examined stringline
         stringline_list = []
@@ -199,6 +309,12 @@ class RefineMatching(MunichData):
             self.__long_local_object(local_pnt_shpy, osm_pnt_shpy, proj)
         else:
             self.__update_points_list(Point(proj))
+
+    def __find_point_name_on_the_graph(self, osm_pnt_shpy):
+        pnts_on_graph = self.osm_as_graph.gdp_pnt.sindex.nearest([osm_pnt_shpy],
+                                                                 return_distance=True, return_all=False)
+        osm_inx = pnts_on_graph[0][1][0]
+        return self.osm_as_graph.gdp_pnt.iloc[osm_inx].name
 
     def __update_points_list(self, proj: Point):
         """

@@ -12,6 +12,8 @@ from geopandas import GeoDataFrame, GeoSeries
 from shapely.coords import CoordinateSequence
 import math
 from classes.osm import *
+from classes.count_osm_matching import *
+from classes.counting import *
 
 
 def osm_file_def():
@@ -238,8 +240,6 @@ def merge_users_network(cycle_merge, car_merge) -> GeoDataFrame:
     :param car_merge:
     :return:
     """
-    cycle_merge.drop_duplicates(subset=['cyclecount_id'], inplace=True)
-    car_merge.drop_duplicates(subset=['carcount_id'], inplace=True)
 
     all_merge = cycle_merge.merge(right=car_merge, left_on=['FROMNODENO', 'TONODENO'],
                                   right_on=['FROMNODENO', 'TONODENO'], how='outer', suffixes=('_cycle', '_car'))
@@ -259,7 +259,7 @@ def merge_users_network(cycle_merge, car_merge) -> GeoDataFrame:
 
 
 def overlay_count_osm(osm_gdf: GeoDataFrame, local_network: GeoDataFrame, osm_columns: list,
-                      local_columns: list, dissolve_by: str) -> dict:
+                      local_columns: list) -> dict:
     """
     This function calculate between osm entities and local network entities
     :param osm_gdf: The OSM network to work on
@@ -267,23 +267,22 @@ def overlay_count_osm(osm_gdf: GeoDataFrame, local_network: GeoDataFrame, osm_co
     :param local_columns: fields of local network to save while the matching process
     :param osm_columns: fields of osm network to save while the matching process
     :return: list of all the gis files been created during implementation of this stage
-    :param dissolve_by: before buffering, the code dissolve osm entities by that field
     """
 
     # and calculate the overlay intersection between the two.
 
-    print('osm_buffer')
+    print('__osm_buffer')
     osm_buffer = GeoDataFrame(osm_gdf[osm_columns],
                               geometry=osm_gdf.geometry.buffer(15, cap_style=2), crs=osm_gdf.crs)
 
-    print('count_buffer')
-    count_buffer = gpd.GeoDataFrame(local_network[local_columns], crs=local_network.crs,
-                                    geometry=local_network.geometry.buffer(15, cap_style=2))
+    print('__count_buffer')
+    count_buffer = GeoDataFrame(local_network[local_columns], crs=local_network.crs,
+                                geometry=local_network.geometry.buffer(15, cap_style=2))
 
-    print('overlay')
+    print('__overlay')
     overlay = count_buffer.overlay(osm_buffer, how='intersection')
     # Calculate the percentage field
-    print('percentage')
+    print('__percentage')
     overlay['areas'] = overlay.area
     count_buffer['areas'] = count_buffer.area
     # The index column in the overlay layer contains the id of the count entity,
@@ -296,7 +295,7 @@ def overlay_count_osm(osm_gdf: GeoDataFrame, local_network: GeoDataFrame, osm_co
     temp = temp.sort_values(['index', 'areas'])['areas']
     overlay = overlay.reset_index().sort_values(['index', 'areas'])
     overlay['percentage'] = temp.values
-    print('calculate angles between elements')
+    print('__calculate angles between elements')
     overlay['parallel'] = overlay.apply(lambda x: angle_between(x, local_network, osm_gdf), axis=1)
     return {'overlay': overlay, 'osm_buffer': osm_buffer,
             'count_buffer': count_buffer, 'osm_gdf': osm_gdf}
@@ -317,15 +316,6 @@ def angle_between(row, local_network, osm_gdf):
         return -1
     else:
         return abs(local_az - osm_az) % 180 % 150
-
-
-# def azimuth_osm(osm_id):
-#     pnt_0 = nodes[ways[osm_id][0]]
-#     pnt_1 = nodes[ways[osm_id][-1]]
-#     if pnt_0 == pnt_1:
-#         return -1
-#     else:
-#         return math.degrees(math.atan2(pnt_1[0] - pnt_0[0], pnt_1[1] - pnt_0[1])) % 360
 
 
 def list_str(as_str):
@@ -364,12 +354,11 @@ def map_matching(overlay: GeoDataFrame, file_count_to_update: GeoDataFrame, grou
     :param groupby_field:
     :return:
     """
-    # ToDo keep status results
-    print('start map matching')
-    print(' find the best matching')
+    print('_start map matching')
+    print('__find the best matching')
     # for each count object return the osm id with the larger overlay with him
     matching_info = overlay.groupby(groupby_field).apply(find_optimal_applicant)
-    print(' finish the best matching')
+    print('__finish the best matching')
     matching_info = matching_info[matching_info.notna()]
     # update cycle count data with the corresponding osm id
     matching_info.sort_index(inplace=True)
@@ -377,10 +366,13 @@ def map_matching(overlay: GeoDataFrame, file_count_to_update: GeoDataFrame, grou
     file_count_to_update.set_index(groupby_field, drop=False, inplace=True)
     file_count_to_update.sort_index(inplace=True)
     file_count_to_update['osm_walcycdata_id'] = -1
+    file_count_to_update['valid'] = -1
     file_count_to_update['osm_walcycdata_id'][
         file_count_to_update[groupby_field].isin(matching_info.index)] = matching_info['osm_id']
+    file_count_to_update['valid'][
+        file_count_to_update[groupby_field].isin(matching_info.index)] = matching_info['valid']
     file_count_to_update.drop('index', axis=1, inplace=True)
-    print('finish map matching')
+    print('_finish map matching')
     return file_count_to_update
 
 
@@ -455,15 +447,18 @@ if __name__ == '__main__':
     type_to_remove = ['C', 'D', 'NT', 'S', 'T', 'U']
     engine = create_engine('postgresql://research:1234@34.142.109.94:5432/walcycdata')
     # dictionary to control which function to run
-    params = {'osm': [True, {'prepare_osm_data': True, 'osm_file': True, 'data_to_server': False,
-                             'find_the_opposite_roads': False}],
+    params = {'osm': [False, {'prepare_osm_data': False, 'osm_file': False, 'data_to_server': True,
+                              'find_the_opposite_roads': False, 'stat_one_way': False}],
               'count': [False,
-                        {'cycle_count': False, 'car_count': False, 'merge_files': True}],
+                        {'cycle_count': False, 'car_count': False, 'merge_files': False, 'data_to_server_car': False,
+                         'data_to_server_cycle': True}],
               'incident': [False, {'prepare_incident': True, 'join_to_bike_network': False}],
-              'count_osm': [False, {'prepare_overlay': False, 'matching': True}],
+              'count_osm': [True,
+                            {'prepare_overlay': False, 'matching': False, 'two_ways_matching': False, 'refine_matching':
+                                False, 'matching_incidents': True}],
               'analysis': False,
               'data_to_server': [False, {'osm': True, 'bikes': False, 'cars': False, 'incidents': False,
-                                        'combined_network': False}]}
+                                         'combined_network': False}]}
 
     if params['osm'][0]:
         # Prepare OSM information
@@ -472,9 +467,9 @@ if __name__ == '__main__':
             # Here the data is downloaded from OSM server to the local machine
             lines, pnts = OSM.prepare_osm_data()
             lines.to_file("shp_files/inputs.gpkg", layer='openstreetmap_data',
-                                           driver="GPKG")
+                          driver="GPKG")
             pnts.to_file("shp_files/inputs.gpkg", layer='openstreetmap_data_nodes',
-                                           driver="GPKG")
+                         driver="GPKG")
         if local_params['osm_file']:
             # The data is prepared for production
             print('create osm table')
@@ -483,7 +478,7 @@ if __name__ == '__main__':
             OSM.osm_file_def(osm_df, cat_file).to_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network',
                                                        driver="GPKG")
 
-        osm_data = gpd.read_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network')
+        osm_data = gpd.read_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network2')
         if local_params['data_to_server']:
             print("upload osm data")
             OSM.data_to_server(data_to_upload=osm_data, columns_to_upload=OSM.osm_column_names,
@@ -492,6 +487,10 @@ if __name__ == '__main__':
             # The algorithm links two-way roads
             OSM.find_the_opposite_roads(osm_gdf=osm_data).to_file("shp_files/two_ways.gpkg",
                                                                   layer='osm_gdf', driver="GPKG")
+        if local_params['stat_one_way']:
+            osm_data = gpd.read_file("shp_files/two_ways.gpkg", layer='osm_gdf')
+            print('stat for one way')
+            OSM.statistic(osm_data)
 
     if params['count'][0]:
         local_params = params['count'][1]
@@ -521,7 +520,23 @@ if __name__ == '__main__':
             all_count = merge_users_network(cycle_merge=cycle, car_merge=car)
             print('_write to disk')
             all_count.reset_index().to_file("shp_files/pr_data.gpkg", layer='all_count', driver="GPKG")
-
+        if local_params['data_to_server_car']:
+            print("upload car data")
+            data = gpd.read_file("shp_files/pr_data.gpkg", layer='car_count2', driver="GPKG")
+            # ToDo should be deleted
+            data.rename(columns={'osm_walcycdata_id': 'osm_id'}, inplace=True)
+            data['carcount_count'] = data['carcount_count'].fillna(0)
+            data['osm_id'] = data['osm_id'].fillna(0)
+            Counting.data_to_server(data_to_upload=data, columns_to_upload=CarCount.column_names(),
+                                    table_name='car_count_data')
+        if local_params['data_to_server_cycle']:
+            print("upload cycle data")
+            data = gpd.read_file("shp_files/pr_data.gpkg", layer='cycle_count2', driver="GPKG")
+            # ToDo should be deleted
+            data.rename(columns={'osm_walcycdata_id': 'osm_id'}, inplace=True)
+            data['osm_id'] = data['osm_id'].fillna(0)
+            Counting.data_to_server(data_to_upload=data, columns_to_upload=CycleCount.column_names(),
+                                    table_name='cycle_count_data')
     if params['incident'][0]:
         print('work on incident data')
         local_params = params['incident'][1]
@@ -545,8 +560,8 @@ if __name__ == '__main__':
             osm_data_columns = ['osm_id', 'highway', 'osm_fclass_hir', 'azimuth']
             count_columns = ['index', 'walcycdata_id_cycle', 'walcycdata_id_car', 'cyclecount_count', 'carcount_count',
                              'azimuth']
-            results = overlay_count_osm(osm_gdf_0=osm_data, local_network=count_data, osm_columns=osm_data_columns,
-                                        local_columns=count_columns, dissolve_by='osm_id')
+            results = overlay_count_osm(osm_gdf=osm_data, local_network=count_data, osm_columns=osm_data_columns,
+                                        local_columns=count_columns)
             print('finish overlay')
             [item[1].to_file("shp_files/matching_files.gpkg", layer=item[0]) for item in results.items()]
         if local_params['matching']:
@@ -554,6 +569,37 @@ if __name__ == '__main__':
             osm_munich_overlay = gpd.read_file('shp_files/matching_files.gpkg', layer='overlay')
             map_matching(overlay=osm_munich_overlay, file_count_to_update=count_data, groupby_field='index').to_file(
                 "shp_files/matching_files.gpkg", layer='count_osm_matching')
+        if local_params['two_ways_matching']:
+            print('_two_ways_matching')
+            matching_data = gpd.read_file('shp_files/matching_files.gpkg', layer='count_osm_matching')
+            my_osm_data = gpd.read_file("shp_files/two_ways.gpkg", layer='osm_gdf')
+            my_matching = Matching(matching_data, my_osm_data)
+            my_matching.update_by_direction()
+            my_matching.osm_matching.to_file("shp_files/two_ways.gpkg", layer='my_matching_dirc', driver="GPKG")
+        if local_params['refine_matching']:
+            my_matching_data = gpd.read_file("shp_files/two_ways.gpkg", layer='my_matching_dirc', driver="GPKG")
+            my_osm_data = gpd.read_file("shp_files/two_ways.gpkg", layer='osm_gdf')
+            my_refine_data = RefineMatching(matching_data=my_matching_data, osm_data=my_osm_data)
+            my_refine_data.refine()
+            my_refine_data.data.to_file("shp_files/matching_files.gpkg", layer='refine_matching', driver="GPKG")
+            my_refine_data.pro_pnt_gdf.to_file("shp_files/matching_files.gpkg", layer='refine_matching_pnts',
+                                               driver="GPKG")
+        if local_params['matching_incidents']:
+            my_osm_data = gpd.read_file("shp_files/two_ways.gpkg", layer='osm_gdf')
+            my_matching_data = gpd.read_file("shp_files/pr_data.gpkg", layer='incident', driver="GPKG")
+            incidents_matchings = IncidentsMatching(local_matching_osm=my_matching_data, osm=my_osm_data)
+            osm_data_columns = ['osm_id','highway']
+            count_columns = ['walcycdata_id']
+            results = incidents_matchings.overlay_count_osm(osm_columns=osm_data_columns, local_columns=count_columns)
+            print('_finish overlay')
+            [item[1].to_file("shp_files/incidents.gpkg", layer=item[0]) for item in results.items()]
+
+            print('_matching_implementation')
+            incidents_overlay = gpd.read_file('shp_files/incidents.gpkg', layer='overlay')
+            incidents_matchings.map_matching(overlay=incidents_overlay, groupby_field='walcycdata_id')
+            incidents_matchings.osm_matching.to_file("shp_files/incidents.gpkg", layer='incidents_with_osm_matching')
+
+
     if params['analysis']:
         print('analysis')
         from classes.Analysis import Analysis
