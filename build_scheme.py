@@ -14,6 +14,7 @@ import math
 from classes.osm import *
 from classes.count_osm_matching import *
 from classes.counting import *
+from classes.incidents import *
 
 
 def osm_file_def():
@@ -452,10 +453,13 @@ if __name__ == '__main__':
               'count': [False,
                         {'cycle_count': False, 'car_count': False, 'merge_files': False, 'data_to_server_car': False,
                          'data_to_server_cycle': True}],
-              'incident': [False, {'prepare_incident': True, 'join_to_bike_network': False}],
-              'count_osm': [True,
+              'incident': [False, {'prepare_incident': False, 'data_to_server': True}],
+              'count_osm': [False,
                             {'prepare_overlay': False, 'matching': False, 'two_ways_matching': False, 'refine_matching':
-                                False, 'matching_incidents': True}],
+                                False, 'matching_incidents': False, 'matching_to_osm_counting': True,
+                             'matching_to_osm_incidents': True
+                             }],
+              'munich_data': [True, {'table_for_server': True}],
               'analysis': False,
               'data_to_server': [False, {'osm': True, 'bikes': False, 'cars': False, 'incidents': False,
                                          'combined_network': False}]}
@@ -478,7 +482,7 @@ if __name__ == '__main__':
             OSM.osm_file_def(osm_df, cat_file).to_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network',
                                                        driver="GPKG")
 
-        osm_data = gpd.read_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network2')
+        osm_data = gpd.read_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network_final')
         if local_params['data_to_server']:
             print("upload osm data")
             OSM.data_to_server(data_to_upload=osm_data, columns_to_upload=OSM.osm_column_names,
@@ -543,12 +547,12 @@ if __name__ == '__main__':
         if local_params['prepare_incident']:
             my_incident = incident_def()
             my_incident.to_file("shp_files/pr_data.gpkg", layer='incident', driver="GPKG")
-        if local_params['join_to_bike_network']:
-            print('join_to_bike_network')
-            my_incident = gpd.read_file("shp_files/pr_data.gpkg", layer='incident')
-            all_count = gpd.read_file("shp_files/pr_data.gpkg", layer='all_count')
-            my_incident = join_to_bike_network(my_incident, all_count)
-            my_incident.to_file("shp_files/pr_data.gpkg", layer='incident_with_street_id', driver="GPKG")
+        if local_params['data_to_server']:
+            print('_data_to_server')
+            my_incident = gpd.read_file("shp_files/incidents.gpkg", layer='incidents_with_osm_matching')
+            # ToDo should be deleted
+            my_incident.rename(columns={'osm_walcycdata_id': 'osm_id'}, inplace=True)
+            MunichData.data_to_server(my_incident, Incidents.column_names, 'incident_data')
 
     if params['count_osm'][0]:
         print('count_osm')
@@ -573,7 +577,7 @@ if __name__ == '__main__':
             print('_two_ways_matching')
             matching_data = gpd.read_file('shp_files/matching_files.gpkg', layer='count_osm_matching')
             my_osm_data = gpd.read_file("shp_files/two_ways.gpkg", layer='osm_gdf')
-            my_matching = Matching(matching_data, my_osm_data)
+            my_matching = RoadMatching(matching_data, my_osm_data)
             my_matching.update_by_direction()
             my_matching.osm_matching.to_file("shp_files/two_ways.gpkg", layer='my_matching_dirc', driver="GPKG")
         if local_params['refine_matching']:
@@ -588,7 +592,7 @@ if __name__ == '__main__':
             my_osm_data = gpd.read_file("shp_files/two_ways.gpkg", layer='osm_gdf')
             my_matching_data = gpd.read_file("shp_files/pr_data.gpkg", layer='incident', driver="GPKG")
             incidents_matchings = IncidentsMatching(local_matching_osm=my_matching_data, osm=my_osm_data)
-            osm_data_columns = ['osm_id','highway']
+            osm_data_columns = ['osm_id', 'highway']
             count_columns = ['walcycdata_id']
             results = incidents_matchings.overlay_count_osm(osm_columns=osm_data_columns, local_columns=count_columns)
             print('_finish overlay')
@@ -598,7 +602,27 @@ if __name__ == '__main__':
             incidents_overlay = gpd.read_file('shp_files/incidents.gpkg', layer='overlay')
             incidents_matchings.map_matching(overlay=incidents_overlay, groupby_field='walcycdata_id')
             incidents_matchings.osm_matching.to_file("shp_files/incidents.gpkg", layer='incidents_with_osm_matching')
-
+        if local_params['matching_to_osm_counting']:
+            refine_matching = gpd.read_file("shp_files/matching_files.gpkg", layer='refine_matching', driver="GPKG")
+            my_osm_data = gpd.read_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network')
+            res = OSM.from_local_to_osm(my_osm_data, refine_matching)
+            res.to_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network2')
+        if local_params['matching_to_osm_incidents']:
+            incidents_matching = gpd.read_file("shp_files/incidents.gpkg", layer='incidents_with_osm_matching',
+                                               driver="GPKG")
+            my_osm_data = gpd.read_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network2')
+            res = OSM.from_incident_to_osm(osm_network=my_osm_data, local_incidents=incidents_matching)
+            res.to_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network_final')
+    if params['munich_data'][0]:
+        local_params = params['munich_data'][1]
+        if local_params['table_for_server']:
+            refine_matching = gpd.read_file("shp_files/matching_files.gpkg", layer='refine_matching', driver="GPKG")
+            cycle, cars = MunichData.table_for_server(based_data=refine_matching)
+            print('_write results into disk')
+            cycle['geometry'] = None
+            cars['geometry'] = None
+            cycle.to_file("shp_files/munich_data.gpkg", layer='matching_cycle')
+            cars.to_file("shp_files/munich_data.gpkg", layer='matching_car')
 
     if params['analysis']:
         print('analysis')

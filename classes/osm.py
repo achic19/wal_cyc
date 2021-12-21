@@ -16,7 +16,7 @@ class OSM(MunichData):
 
     osm_column_names = ['walcycdata_id', 'walcycdata_is_valid', 'walcycdata_last_modified', 'osm_id', 'osm_fclass',
                         'osm_name', 'osm_oneway', 'osm_maxspeed', 'osm_layer', 'osm_bridge', 'osm_tunnel',
-                        'cyclecount_count', 'carcount_count', 'geometry']
+                        'cyclecount_count', 'carcount_count', 'num_incidents', 'geometry']
 
     @staticmethod
     def prepare_osm_data():
@@ -143,9 +143,7 @@ class OSM(MunichData):
         # make sure osm_id is the index
         osm_network.set_index('osm_id', inplace=True)
         # form str  to int list in local_matching_network
-        local_matching_network['start_osm_id'] = local_matching_network['start_osm_id'].apply(
-            lambda x: [int(i) for i in x.split(',')])
-        local_matching_network['end_osm_id'] = local_matching_network['end_osm_id'].apply(
+        local_matching_network['osm_ids'] = local_matching_network['osm_ids'].apply(
             lambda x: [int(i) for i in x.split(',')])
         # null to zero
         local_matching_network['carcount_count'] = local_matching_network['carcount_count'].fillna(0)
@@ -156,7 +154,6 @@ class OSM(MunichData):
         # Add four new two columns sum and time
         osm_network[['sum_count_car', 'num_count_car', 'sum_count_cycle', 'num_count_cycle']] = 0
 
-        # ToDo add another row for incidents counting
         def calculate_counting(row):
             # The method add count information based on the date in row
 
@@ -169,16 +166,8 @@ class OSM(MunichData):
                     osm_network.at[osm_id, 'sum_count_cycle'] += row['cyclecount_count']
                     osm_network.at[osm_id, 'num_count_cycle'] += 1
 
-            osm_walcycdata_id = row['osm_walcycdata_id']
-            # if start_point_id is -2 , add the osm_walcycdata_id
-            if row['start_point_id'] == -2:
-                count_per_row(osm_walcycdata_id)
-            else:
-                # take all the values from start_osm_id and end_osm_id and remove osm_walcycdata_id and for all
-                list_osm_ids = row['start_osm_id']
-                list_osm_ids.extend(row['end_osm_id'])
-                list_osm_ids.remove(osm_walcycdata_id)
-                [count_per_row(item) for item in list_osm_ids]
+            # take all the values from start_osm_id and end_osm_id and remove osm_walcycdata_id and for all
+            [count_per_row(item) for item in row['osm_ids']]
 
         # loop over each filtered matching network:
         local_matching_network.apply(calculate_counting, axis=1)
@@ -187,6 +176,22 @@ class OSM(MunichData):
         osm_network['carcount_count'] = osm_network['sum_count_cycle'] / osm_network['num_count_cycle']
         osm_network[['cyclecount_count', 'carcount_count']] = osm_network[
             ['cyclecount_count', 'carcount_count']].fillna(0)
+        return osm_network
+
+    @staticmethod
+    def from_incident_to_osm(osm_network: GeoDataFrame, local_incidents: GeoDataFrame) -> GeoDataFrame:
+        """
+        This method update osm network with car and bike countings
+        :param osm_network:
+        :param local_incidents:
+        :return:
+        """
+        print('from_incident_to_osm')
+        # make sure osm_id is the index
+        osm_network.set_index('osm_id', inplace=True)
+        osm_network['num_incidents'] = local_incidents.groupby('osm_walcycdata_id')['index'].count()
+        osm_network['num_incidents'] = osm_network['num_incidents'].fillna(0)
+        print('finish from_incident_to_osm')
         return osm_network
 
     @staticmethod

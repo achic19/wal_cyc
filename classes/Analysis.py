@@ -15,3 +15,5 @@ class Analysis:
         cat_file.set_index('categories', inplace=True)
         osm_to_local["osm_fclass_hir"] = cat_file.loc[osm_to_local["highway"]]['hierarchical values'].values
         return osm_to_local
+
+

@@ -29,7 +29,7 @@ class RoadMatching(Matching):
     def update_by_direction(self):
         print("_update_by_direction")
         self.osm_matching['osm_walcycdata_id'] = self.osm_matching.apply(
-            lambda row: self.swap_directions(row[['azimuth', 'osm_walcycdata_id', 'geometry']]), axis=1)
+            lambda row: self.swap_directions(row[['index', 'azimuth', 'osm_walcycdata_id', 'geometry']]), axis=1)
 
     def swap_directions(self, row):
         """
@@ -45,7 +45,8 @@ class RoadMatching(Matching):
         # no opposite side to the OSM object
         if pair[0] == -1:
             return row['osm_walcycdata_id']
-        if abs(row.azimuth - osm_object.azimuth.values[0]) > 30:
+        is_opposite_angle = abs(row.azimuth - osm_object.azimuth.values[0])
+        if 30 < is_opposite_angle < 350:
             # Select the opposite direction
             if len(pair) == 1:
                 return pair[0]
@@ -71,8 +72,6 @@ class IncidentsMatching(Matching):
     def __init__(self, local_matching_osm: GeoDataFrame, osm: GeoDataFrame):
         print('_matching_incidents')
         super().__init__(local_matching_osm, osm)
-        # delete from osm dataset highway = steps and footway
-        self.osm = self.osm[(self.osm['highway'] != 'footway') & (self.osm['highway'] != 'steps')]
 
     def overlay_count_osm(self, osm_columns: list, local_columns: list) -> dict:
         """
@@ -138,6 +137,11 @@ class IncidentsMatching(Matching):
         """
         if len(group) > 1:
             group.sort_values(['areas'], ascending=False, inplace=True)
+            # the code prefers not to match to footway or steps or path
+            for row_temp in group.iterrows():
+                row = row_temp[1]
+                if (row['highway'] != 'footway') & (row['highway'] != 'steps') & (row['highway'] != 'path'):
+                    return row
             return group.iloc[0]
         return group.iloc[0]
 
@@ -176,12 +180,12 @@ class RefineMatching(MunichData):
             """
             if row.osm_walcycdata_id == -1:
                 # no matching osm object
-                return -1, -1, -1, -1
+                return -1, -1, -1
             osm_object = self.osm.loc[row.osm_walcycdata_id]
             osm_az = osm_object.azimuth
             if osm_az == -1:
                 # the matching osm object has circular feature
-                return -2, -2, -2, -2
+                return -2, -2, -2
             # First, if necessary, reverse the local object to be in the same direction as the osm object
             angle = abs(row.azimuth - osm_az)
             try:
@@ -192,25 +196,29 @@ class RefineMatching(MunichData):
                     pnts_list = list(row.geometry.coords)
             except NotImplementedError:
                 # ToDo for multilinestring which will not be appear in the new local network data
-                return -4, -4, -4, -4
+                return -4, -4, -4
             try:
                 self.osm_obj = osm_object
                 # find more osm
                 self.__project_pnt_osm_obj(pnts_list[0], 0)
                 self.list_of_osm_obj.reverse()
-                firsts_osm = self.list_of_osm_obj
+                osm_ids = self.list_of_osm_obj
                 first_proj = self.ind_pnt
                 self.osm_obj = osm_object
                 self.__project_pnt_osm_obj(pnts_list[-1], -1)
                 lasts_osm = self.list_of_osm_obj
                 last_proj = self.ind_pnt
 
-                return firsts_osm, first_proj, lasts_osm, last_proj
+                # append two lists into one
+                osm_ids.extend(lasts_osm)
+                osm_ids.remove(osm_object.name)
+
+                return first_proj, osm_ids, last_proj
             except NotImplementedError:
                 # ToDo for multilinestring which will not be appear in the new osm data
-                return -4, -4, -4, -4
+                return -4, -4, -4
 
-        new_fields = ['start_osm_id', 'start_point_id', 'end_osm_id', 'end_point_id']
+        new_fields = ['start_point_id', 'osm_ids', 'end_point_id']
         print('_refine')
         self.data[new_fields] = list(self.data.apply(find_finer_data_osm, axis=1))
         # Update gdf with the new points
@@ -219,9 +227,7 @@ class RefineMatching(MunichData):
         self.pro_pnt_gdf.rename(columns={'index': 'pnt_id'}, inplace=True)
         self.pro_pnt_gdf.crs = MunichData.crs
 
-        self.data['start_osm_id'] = self.data['start_osm_id'].apply(
-            lambda x: ','.join(map(str, x)) if isinstance(x, list) else str(x))
-        self.data['end_osm_id'] = self.data['end_osm_id'].apply(
+        self.data['osm_ids'] = self.data['osm_ids'].apply(
             lambda x: ','.join(map(str, x)) if isinstance(x, list) else str(x))
 
     def __project_pnt_osm_obj(self, pnt: tuple, ind: int):
@@ -305,7 +311,7 @@ class RefineMatching(MunichData):
             local_pnt_shpy) else osm_pnt_1
         osm_pnt = list(osm_pnt_shpy.coords)[0]
         if round(proj[0], 0) == round(osm_pnt[0], 0) and round(proj[1], 0) == round(
-                osm_pnt[1], 0) and ((pnt[0] - osm_pnt[0]) ** 2 + (pnt[1] - osm_pnt[1]) ** 2) ** 0.5 > 100:
+                osm_pnt[1], 0) and ((pnt[0] - osm_pnt[0]) ** 2 + (pnt[1] - osm_pnt[1]) ** 2) ** 0.5 > 50:
             self.__long_local_object(local_pnt_shpy, osm_pnt_shpy, proj)
         else:
             self.__update_points_list(Point(proj))
