@@ -17,53 +17,6 @@ from classes.counting import *
 from classes.incidents import *
 
 
-def osm_file_def():
-    osm_df = gpd.read_file('shp_files/osm_road_network.shp')
-
-    # drop duplicate
-    osm_df.drop_duplicates(subset=['geometry'], inplace=True)
-    # change table names
-    osm_df.rename(
-        columns={"osmid": "osm_id", "name": "osm_name", "oneway": "osm_oneway",
-                 "maxspeed": "osm_maxspeed",
-                 "layer": "osm_layer", "bridge": "osm_bridge", "tunnel": "osm_tunnel"}, inplace=True)
-    # categorical values  - f_class
-    cat_file = pd.read_csv('shp_files/cat.csv')
-    osm_df = osm_df[osm_df["highway"].isin(cat_file['categories'])]
-    cat_file.set_index('categories', inplace=True)
-    osm_df["osm_fclass"] = cat_file.loc[osm_df["highway"]]['values'].values
-    osm_df["osm_fclass_hir"] = cat_file.loc[osm_df["highway"]]['hierarchical values'].values
-
-    # bool values  -bridge,tunnel
-    osm_df = to_bool(osm_df, 'osm_bridge')
-    osm_df = to_bool(osm_df, 'osm_tunnel')
-
-    # new fields, walcycdata_id = a unique number with leading 4 for osm
-    osm_df.reset_index(inplace=True)
-    n = len(osm_df)
-    osm_df['walcycdata_id'], osm_df['walcycdata_is_valid'], osm_df['walcycdata_last_modified'] = pd.Series(
-        map(lambda x: int('4' + x), np.arange(
-            n).astype(str))), 1, date
-    # drop fields
-    osm_df.drop(columns=['index', 'u', 'v', 'key'], inplace=True)
-
-    # more changes should be aplie
-    to_int8 = ['walcycdata_is_valid', 'osm_bridge', 'osm_tunnel', "osm_oneway"]
-    osm_df[to_int8] = osm_df[to_int8].astype(np.int8)
-
-    to_int = ['osm_maxspeed', "osm_layer"]
-    osm_df[to_int] = osm_df[to_int].apply(lambda x: pd.to_numeric(x, errors='coerce')).fillna(0).astype(int)
-
-    osm_df.set_index('walcycdata_id', inplace=True)
-    return osm_df
-
-
-def to_bool(osm_df, field):
-    osm_df[field].loc[~osm_df[field].isnull()] = 1  # not nan
-    osm_df[field].loc[(osm_df[field].isnull()) | (osm_df[field] == 'no')] = 0  # not nan
-    return osm_df
-
-
 def is_parallel(geo_1: CoordinateSequence, geo_2: CoordinateSequence):
     """
     This function check whether two geometries are parallel (with a tolerance of 20 degrees)
@@ -114,124 +67,12 @@ def incident_def():
     # new fields, , walcycdata_id = a unique number with leading 1 for incidents
     incident.reset_index(inplace=True)
     n = len(incident)
-    incident['walcycdata_id'], incident['walcycdata_is_valid'], incident['walcycdata_last_modified'], incident[
-        'osm_walcycdata_id'] = pd.Series(map(lambda x: int('1' + x), np.arange(n).astype(str))), 1, date, -1
-    incident = general_tasks(file=incident, is_type=False)
+    # ToDo should be update
+    # incident['walcycdata_id'], incident['walcycdata_is_valid'], incident['walcycdata_last_modified'], incident[
+    #     'osm_walcycdata_id'] = pd.Series(map(lambda x: int('1' + x), np.arange(n).astype(str))), 1, date, -1
+    # incident = general_tasks(file=incident, is_type=False)
     incident.set_index('walcycdata_id', inplace=True)
     return incident
-
-
-def join_to_bike_network(incident_gdb: GeoDataFrame, network: GeoDataFrame) -> GeoDataFrame:
-    """
-    Find for each incident the closet street segment (with bike 'NO')
-    :param incident_gdb:
-    :param network:
-    :return:
-    """
-
-    # remove from the network rows with Null values in 'Cyclecount_id'
-    network = GeoDataFrame(network[network['Cyclecount_id'].notna()]['Cyclecount_id'], geometry=network.geometry,
-                           crs=network.crs)
-    return gpd.sjoin_nearest(incident_gdb, network, how='left', distance_col='dist')
-
-
-def cycle_count_def(count, counts_nodes: GeoDataFrame):
-    """
-    This method calcultes
-    :param count:
-    :param counts_nodes: for Azimuth calculation
-    :return:
-    """
-    # project and clip
-    count = general_tasks(file=count, is_type=True, counts_nodes=counts_nodes)
-    # change table names
-    count.rename(
-        columns={"NO": "cyclecount_id", "ZAEHLUN~19": "cyclecount_count"}, inplace=True)
-
-    # drop fields
-    count = count[['FROMNODENO', 'TONODENO', 'cyclecount_id', 'cyclecount_count', 'TSYSSET', 'azimuth', 'geometry']]
-
-    # new fields, walcycdata_id = a unique number with leading 2 for cycle count
-    count.reset_index(inplace=True)
-    n = len(count)
-    count['walcycdata_id'] = pd.Series(map(lambda x: int('2' + x), np.arange(n).astype(str)))
-    count['walcycdata_is_valid'], count['walcycdata_last_modified'], \
-    count['osm_walcycdata_id'], count['cyclecount_timestamp_start'], count[
-        'cyclecount_timestamp_end'] = 1, date, -1, -1, -1
-    count.set_index('walcycdata_id', inplace=True)
-    return count.drop('index', axis=1)
-
-
-def car_count_def(count, counts_nodes: GeoDataFrame):
-    # project and clip
-    count = general_tasks(file=count, is_type=True, counts_nodes=counts_nodes)
-    # change table names
-    count.rename(
-        columns={"NO": "carcount_id", "ZOhlung_~7": "carcount_count"}, inplace=True)
-
-    # drop fields
-    count = count[['FROMNODENO', 'TONODENO', 'carcount_id', 'carcount_count', 'TSYSSET', 'azimuth', 'geometry']]
-
-    # new fields, walcycdata_id = a unique number with leading 3 for cycle count
-    count.reset_index(inplace=True)
-    n = len(count)
-    count['walcycdata_id'], count['walcycdata_is_valid'], count['walcycdata_last_modified'], \
-    count['osm_walcycdata_id'], count['carcount_timestamp_start'], count[
-        'carcount_timestamp_end'] = pd.Series(
-        map(lambda x: int('3' + x), np.arange(n).astype(str))), 1, date, -1, -1, -1
-    count.set_index('walcycdata_id', inplace=True)
-    return count.drop('index', axis=1)
-
-
-def general_tasks(file: GeoDataFrame, is_type: bool, counts_nodes: GeoDataFrame) -> GeoDataFrame:
-    """
-    :param file: delete nan geometry and than reprojected, clip and do it unidirectional
-    :param is_type: control whether to remove certain types
-    :return: gdf
-    :param counts_nodes: for Azimuth calculation
-    """
-    print("_gis_oper_for_all")
-    print('__clip')
-    file = file[~file.is_empty]
-    # "Sjoin" is used to remove the entire segment that intersects the clip.
-    clipped = file.to_crs(crs).sjoin(clip_file, how="inner", predicate='within')
-    clipped = clipped[~clipped.is_empty][file.columns]
-    # calculate azimuth
-    print("__calculate azimuth")
-    counts_nodes.set_index('NO', inplace=True)
-    clipped['azimuth'] = clipped.apply(
-        lambda row: calculate_azimuth(counts_nodes.loc[row['FROMNODENO']], counts_nodes.loc[row['TONODENO']]), axis=1)
-    if is_type:
-        print("__calculate is_type")
-        clipped['is_type'] = clipped['TSYSSET'].apply(remove_type)
-        return clipped[clipped['is_type']]
-    else:
-        return clipped
-
-
-def calculate_azimuth(p1, p2):
-    try:
-        return math.degrees(math.atan2(p2['XCOORD'] - p1['XCOORD'], p2['YCOORD'] - p1['YCOORD'])) % 360
-    except:
-        print('can not calculate azimuth')
-        return -1
-
-
-def remove_type(value):
-    """
-    This method remove segments appear in the list type_to_remove
-    :param value:
-    :return:
-    """
-    if value == 'R,U':
-        return False
-    if value is None:
-        return True
-    row_split = value.split(',')
-    for val in row_split:
-        if val not in type_to_remove:
-            return True
-    return False
 
 
 def merge_users_network(cycle_merge, car_merge) -> GeoDataFrame:
@@ -247,7 +88,7 @@ def merge_users_network(cycle_merge, car_merge) -> GeoDataFrame:
     # 'geometry_cycle' will be the geometry for all the the entities in the new file
     all_merge.loc[all_merge['geometry_cycle'].isnull(), 'geometry_cycle'] = \
         all_merge[all_merge['geometry_cycle'].isnull()]['geometry_car']
-    all_merge = GeoDataFrame(all_merge, geometry=all_merge['geometry_cycle'], crs=crs)
+    all_merge = GeoDataFrame(all_merge, geometry=all_merge['geometry_cycle'], crs=MunichData.crs)
 
     all_merge.drop(['geometry_car', 'geometry_cycle'], axis=1, inplace=True)
     # Combine two azimuth columns into one
@@ -437,16 +278,9 @@ def find_the_azimuth_between_two_options(az_1, az_2):
 
 
 if __name__ == '__main__':
-
-    # Get the the original OSM network without any editing
-    import pickle
-
-    # global variables
-    clip_file = gpd.read_file('shp_files/munich_3857.shp')
-    crs = "EPSG:3857"
-    date = pd.to_datetime("today")
-    type_to_remove = ['C', 'D', 'NT', 'S', 'T', 'U']
+    # general variables
     engine = create_engine('postgresql://research:1234@34.142.109.94:5432/walcycdata')
+    clip_file = gpd.read_file('shp_files/munich_3857.shp')
     # dictionary to control which function to run
     params = {'osm': [False, {'prepare_osm_data': False, 'osm_file': False, 'data_to_server': True,
                               'find_the_opposite_roads': False, 'stat_one_way': False}],
@@ -459,8 +293,8 @@ if __name__ == '__main__':
                                 False, 'matching_incidents': False, 'matching_to_osm_counting': True,
                              'matching_to_osm_incidents': True
                              }],
-              'munich_data': [True, {'table_for_server': True}],
-              'analysis': False,
+              'munich_data': [False, {'table_for_server': True}],
+              'analysis': [True, {'osm_network_local_network': False, 'analysis_relations': True}],
               'data_to_server': [False, {'osm': True, 'bikes': False, 'cars': False, 'incidents': False,
                                          'combined_network': False}]}
 
@@ -469,32 +303,35 @@ if __name__ == '__main__':
         local_params = params['osm'][1]
         if local_params['prepare_osm_data']:
             # Here the data is downloaded from OSM server to the local machine
-            lines, pnts = OSM.prepare_osm_data()
-            lines.to_file("shp_files/inputs.gpkg", layer='openstreetmap_data',
+            polygon = gpd.read_file(r'shp_files\munich_4326_large.shp')['geometry'][0]
+            lines, pnts = OSM.prepare_osm_data(polygon=polygon)
+            lines.to_file("shp_files/osm/osm.gpkg", layer='openstreetmap_data',
                           driver="GPKG")
-            pnts.to_file("shp_files/inputs.gpkg", layer='openstreetmap_data_nodes',
+            pnts.to_file("shp_files/osm/osm.gpkg", layer='openstreetmap_data_nodes',
                          driver="GPKG")
         if local_params['osm_file']:
             # The data is prepared for production
             print('create osm table')
-            osm_df = gpd.read_file("shp_files/inputs.gpkg", layer='openstreetmap_data')
-            cat_file = pd.read_csv('shp_files/cat.csv')
-            OSM.osm_file_def(osm_df, cat_file).to_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network',
+            osm_df = gpd.read_file("shp_files/osm/osm.gpkg", layer='openstreetmap_data')
+            cat_file = pd.read_csv('shp_files/osm/cat.csv')
+            OSM.osm_file_def(osm_df, cat_file).to_file("shp_files/osm/osm.gpkg", layer='openstreetmap_road_network',
                                                        driver="GPKG")
 
-        osm_data = gpd.read_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network_final')
+        osm_data = gpd.read_file("shp_files/osm/osm.gpkg", layer='openstreetmap_road_network')
         if local_params['data_to_server']:
             print("upload osm data")
             OSM.data_to_server(data_to_upload=osm_data, columns_to_upload=OSM.osm_column_names,
                                table_name='openstreetmap_road_network')
         if local_params['find_the_opposite_roads']:
             # The algorithm links two-way roads
-            OSM.find_the_opposite_roads(osm_gdf=osm_data).to_file("shp_files/two_ways.gpkg",
-                                                                  layer='osm_gdf', driver="GPKG")
+            OSM.find_the_opposite_roads(osm_gdf=osm_data).to_file("shp_files/osm/osm.gpkg",
+                                                                  layer='openstreetmap_road_network', driver="GPKG")
         if local_params['stat_one_way']:
-            osm_data = gpd.read_file("shp_files/two_ways.gpkg", layer='osm_gdf')
+            osm_data = gpd.read_file("shp_files/osm/osm.gpkg", layer='openstreetmap_road_network')
             print('stat for one way')
-            OSM.statistic(osm_data)
+            res = OSM.statistic(osm_data)
+            file_name = '"shp_files/osm/stat_one_way.csv'
+            res.to_csv(file_name)
 
     if params['count'][0]:
         local_params = params['count'][1]
@@ -502,9 +339,14 @@ if __name__ == '__main__':
         if local_params['cycle_count']:
             print('create cycle_count table')
             # upload files
-            cycle_count = gpd.read_file('shp_files/cycle_count_data.shp')
-            cycle_count_nodes = gpd.read_file('shp_files/cycle_count_data_nodes.shp')
-            my_cycle_count = cycle_count_def(count=cycle_count, counts_nodes=cycle_count_nodes)
+            cycle_count = gpd.read_file('shp_files/cycle_counting.gpkg', layer='Radnetz_VVD-M_Analyse_2019_link',
+                                        driver="GPKG")
+            cycle_count_nodes = gpd.read_file('shp_files/cycle_count', layer='Radnetz_VVD-M_Analyse_2019_node',
+                                              driver="GPKG")
+
+            my_cycle_count = CycleCount.cycle_count_def(count=cycle_count, counts_nodes=cycle_count_nodes,
+                                                        clip_file=clip_file)
+
             print('write to disk')
             my_cycle_count.to_file("shp_files/pr_data.gpkg", layer='cycle_count', driver="GPKG")
 
@@ -512,7 +354,8 @@ if __name__ == '__main__':
             print('create car_count table')
             car_count = gpd.read_file('shp_files/cars_count_data.shp')
             car_count_nodes = gpd.read_file('shp_files/car_count_data_nodes.shp')
-            my_car_count = car_count_def(car_count, car_count_nodes)
+            my_car_count = CarCount.car_count_def(count=car_count, counts_nodes=car_count_nodes,
+                                                  clip_file=clip_file)
             my_car_count.to_file("shp_files/pr_data.gpkg", layer='car_count', driver="GPKG")
 
         if local_params['merge_files']:
@@ -614,26 +457,40 @@ if __name__ == '__main__':
             res = OSM.from_incident_to_osm(osm_network=my_osm_data, local_incidents=incidents_matching)
             res.to_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network_final')
     if params['munich_data'][0]:
+        print('munich_data')
         local_params = params['munich_data'][1]
         if local_params['table_for_server']:
+            print('_table_for_server')
             refine_matching = gpd.read_file("shp_files/matching_files.gpkg", layer='refine_matching', driver="GPKG")
             cycle, cars = MunichData.table_for_server(based_data=refine_matching)
-            print('_write results into disk')
+            print('__write results into disk')
             cycle['geometry'] = None
             cars['geometry'] = None
             cycle.to_file("shp_files/munich_data.gpkg", layer='matching_cycle')
             cars.to_file("shp_files/munich_data.gpkg", layer='matching_car')
 
-    if params['analysis']:
+    if params['analysis'][0]:
         print('analysis')
         from classes.Analysis import Analysis
 
-        cat_file = pd.read_csv('shp_files/cat.csv')
-        osm_data = gpd.read_file("shp_files/matching_files.gpkg", layer='osm_gdf')
-        matching_data = gpd.read_file("shp_files/matching_files.gpkg", layer='count_osm_matching')[
-            'osm_walcycdata_id'].unique()
-        results = Analysis.osm_network_local_network(osm_network=osm_data, osm_id_list=matching_data, cat_file=cat_file)
-        results.to_file("shp_files/matching_files.gpkg", layer='osm_linked_to_counting', driver="GPKG")
+        local_params = params['analysis'][1]
+        if local_params['osm_network_local_network']:
+            cat_file = pd.read_csv('shp_files/cat.csv')
+            osm_data = gpd.read_file("shp_files/matching_files.gpkg", layer='osm_gdf')
+            matching_data = gpd.read_file("shp_files/matching_files.gpkg", layer='count_osm_matching')[
+                'osm_walcycdata_id'].unique()
+            results = Analysis.osm_network_local_network(osm_network=osm_data, osm_id_list=matching_data,
+                                                         cat_file=cat_file)
+            results.to_file("shp_files/matching_files.gpkg", layer='osm_linked_to_counting', driver="GPKG")
+        if local_params['analysis_relations']:
+            cycle = gpd.read_file("shp_files/munich_data.gpkg", layer='matching_cycle', driver="GPKG")
+            cars = gpd.read_file("shp_files/munich_data.gpkg", layer='matching_car', driver="GPKG")
+            res, my_dict = Analysis.analysis_relations(cycle_db=cycle, cars_db=cars)
+            print(my_dict)
+            print(len(res))
+            print('_write results into disk')
+
+            res.to_csv(path_or_buf="shp_files/analysis/matching_with_relations.csv")
 
     if params['data_to_server'][0]:
         local_params = params['data_to_server'][1]

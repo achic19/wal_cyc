@@ -229,6 +229,7 @@ class RefineMatching(MunichData):
 
         self.data['osm_ids'] = self.data['osm_ids'].apply(
             lambda x: ','.join(map(str, x)) if isinstance(x, list) else str(x))
+        #ToDo null fo -1 or null
 
     def __project_pnt_osm_obj(self, pnt: tuple, ind: int):
         """

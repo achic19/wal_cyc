@@ -19,13 +19,11 @@ class OSM(MunichData):
                         'cyclecount_count', 'carcount_count', 'num_incidents', 'geometry']
 
     @staticmethod
-    def prepare_osm_data():
+    def prepare_osm_data(polygon):
         print('_prepare_osm_data')
         # define the tags that should be downloaded with the network
         useful_tags_path = ['osmid', 'highway', 'name', 'oneway', 'maxspeed', 'layer', 'bridge', 'tunnel']
         ox.utils.config(useful_tags_way=useful_tags_path)
-        polygon = gpd.read_file(r'shp_files\munich_4326_large.shp')['geometry'][0]
-
         # Download data from osm interface based on polygon boundaries
         print('_download data')
         response_jsons = downloader._osm_network_download(polygon, 'all', None)
@@ -92,7 +90,7 @@ class OSM(MunichData):
         osm_df[to_int] = osm_df[to_int].apply(lambda x: pd.to_numeric(x, errors='coerce')).fillna(0).astype(int)
 
         # Obtain azimuth
-        def azimuth_osm(geometry):
+        def __azimuth_osm(geometry):
             pnt_0 = geometry.coords[0]
             pnt_1 = geometry.coords[-1]
             if pnt_0 == pnt_1:
@@ -100,7 +98,7 @@ class OSM(MunichData):
             else:
                 return degrees(atan2(pnt_1[0] - pnt_0[0], pnt_1[1] - pnt_0[1])) % 360
 
-        osm_df['azimuth'] = osm_df['geometry'].apply(azimuth_osm)
+        osm_df['azimuth'] = osm_df['geometry'].apply(__azimuth_osm)
         return osm_df.drop('index', axis=1)
 
     @staticmethod
@@ -129,8 +127,8 @@ class OSM(MunichData):
                            columns=['count', 'found_count', 'found_count_percentage', 'not found_count',
                                     'not found_count_percentage'])
         print(res)
-        file_name = 'stat.csv'
-        res.to_csv(file_name)
+        return res
+
 
     @staticmethod
     def from_local_to_osm(osm_network: GeoDataFrame, local_matching_network: GeoDataFrame) -> GeoDataFrame:
