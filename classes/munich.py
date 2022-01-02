@@ -4,7 +4,7 @@ from migrate.changeset.constraint import PrimaryKeyConstraint
 from geopandas import GeoDataFrame
 import pandas as pd
 import geopandas as gpd
-
+from typing import Tuple
 
 class MunichData:
     schema = 'production'
@@ -28,7 +28,7 @@ class MunichData:
         return clipped[~clipped.is_empty][file.columns]
 
     @staticmethod
-    def table_for_server(based_data: GeoDataFrame) -> tuple[GeoDataFrame, GeoDataFrame]:
+    def table_for_server(based_data: GeoDataFrame) -> Tuple[GeoDataFrame, GeoDataFrame]:
         """
         Create two new table that keep only the cycle_id and car_id with the matching osm
         :param based_data:
@@ -104,15 +104,16 @@ class MunichData:
         # define primary key
         print('_define primary key')
         metadata = MetaData(bind=engine, schema=MunichData.schema)
-        my_table = sqlalchemy.Table(table_name, metadata, autoload=True)
+        my_table = sqlalchemy.Table(table_name, metadata, 
+                        autoload=True)
         cons = PrimaryKeyConstraint('walcycdata_id', table=my_table)
         cons.create()
 
         # define fields as not null
         print('_define fields as not null')
         columns_to_upload.remove('walcycdata_id')
-        for col in columns_to_upload:
-            col = sqlalchemy.Column(col, metadata)
+        for colname in columns_to_upload:
+            col = sqlalchemy.Column(colname, metadata)
             col.alter(nullable=False, table=my_table)
 
 
