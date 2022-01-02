@@ -4,8 +4,9 @@ import osmnx as ox
 from osmnx import downloader
 from shapely.geometry import LineString, Point
 import pandas as pd
+from pandas import DataFrame
 import numpy as np
-from math import degrees, atan2
+from math import degrees, atan2, sqrt
 from classes.munich import *
 import pickle
 import networkx as nx
@@ -129,15 +130,16 @@ class OSM(MunichData):
         print(res)
         return res
 
-
     @staticmethod
     def from_local_to_osm(osm_network: GeoDataFrame, local_matching_network: GeoDataFrame) -> GeoDataFrame:
-        '''
+        """
         This method update osm network with car and bike countings
         :param osm_network:
         :param local_matching_network:
         :return:
-        '''
+        """
+        print('_matching_to_osm_counting')
+        print('__preparation')
         # make sure osm_id is the index
         osm_network.set_index('osm_id', inplace=True)
         # form str  to int list in local_matching_network
@@ -150,30 +152,76 @@ class OSM(MunichData):
             (local_matching_network['carcount_count'] > 0) & (local_matching_network['cyclecount_count'] > 0) & (
                     local_matching_network['osm_walcycdata_id'] != -1)]
         # Add four new two columns sum and time
-        osm_network[['sum_count_car', 'num_count_car', 'sum_count_cycle', 'num_count_cycle']] = 0
+        avg_count_columns_names = ['list_count_cycle', 'list_count_car', 'list_length_cycle', 'list_length_car']
+        avg_count_columns_names_opp = ['list_count_cycle_opposite_dir', 'list_count_car_opposite_dir',
+                                       'list_length_cycle_dir',
+                                       'list_length_car_dir']
+
+        osm_network[avg_count_columns_names] = []
+        osm_network[avg_count_columns_names_opp] = []
 
         def calculate_counting(row):
             # The method add count information based on the date in row
 
-            def count_per_row(osm_id):
-                # Update count for the given osm_id
-                if row['carcount_count'] > 0:
-                    osm_network.at[osm_id, 'sum_count_car'] += row['carcount_count']
-                    osm_network.at[osm_id, 'num_count_car'] += 1
-                if row['cyclecount_count'] > 0:
-                    osm_network.at[osm_id, 'sum_count_cycle'] += row['cyclecount_count']
-                    osm_network.at[osm_id, 'num_count_cycle'] += 1
+            def find_direction_update(osm_id):
+                """
+                This method updates the proper columns by azimuths of osm and local objects
+                 (same direction or opposite one)
+                :param osm_id:
+                :return:
+                """
+
+                def count_per_row(columns_to_update: list):
+                    """
+                    Update count for the given osm_id
+                    :param columns_to_update: list of columns names to updata
+                    :return:
+                    """
+                    if row['cyclecount_count'] > 0:
+                        osm_network.at[osm_id, columns_to_update[0]].append(row['cyclecount_count'])
+                        osm_network.at[osm_id, columns_to_update[1]].append(row.length)
+                    if row['carcount_count'] > 0:
+                        osm_network.at[osm_id, columns_to_update[0]].append(row['carcount_count'])
+                        osm_network.at[osm_id, columns_to_update[1]].append(row.length)
+
+                osm_azimuth = osm_network.at[osm_id, 'azimuth']
+                is_opposite_angle = abs(row.azimuth - osm_azimuth)
+                if 30 < is_opposite_angle < 330:
+                    count_per_row(avg_count_columns_names_opp)
+                else:
+                    count_per_row(avg_count_columns_names)
 
             # take all the values from start_osm_id and end_osm_id and remove osm_walcycdata_id and for all
-            [count_per_row(item) for item in row['osm_ids']]
+            [find_direction_update(item) for item in row['osm_ids']]
 
         # loop over each filtered matching network:
         local_matching_network.apply(calculate_counting, axis=1)
-        # calculate avarage
-        osm_network['cyclecount_count'] = osm_network['sum_count_car'] / osm_network['num_count_car']
-        osm_network['carcount_count'] = osm_network['sum_count_cycle'] / osm_network['num_count_cycle']
-        osm_network[['cyclecount_count', 'carcount_count']] = osm_network[
-            ['cyclecount_count', 'carcount_count']].fillna(0)
+        # calculate average
+        print('__calculate average')
+
+        def weighted_avg_and_std(values, weights):
+            """
+            Return the weighted average and standard deviation.
+
+            values, weights -- Numpy ndarrays with the same shape.
+            """
+            if len(values) == 0:
+                return [0, 0]
+            if len(values) == 1:
+                return [values[0], 0]
+            average = np.average(values, weights=weights)
+            # Fast and numerically precise:
+            variance = np.average((values - average) ** 2, weights=weights)
+            return [average, sqrt(variance)]
+
+        osm_network[['cyclecount_count', 'cyclecount_count_std']] = osm_network.apply(
+            lambda x: weighted_avg_and_std(x['list_cyclecount_count'], x['list_length_cycle']), axis=1)
+        osm_network[['cyclecount_count_dir', 'cyclecount_count_std_dir']] = osm_network.apply(
+            lambda x: weighted_avg_and_std(x['list_cyclecount_count'], x['list_length_cycle']), axis=1)
+        osm_network[['cyclecount_count', 'cyclecount_count_std']] = osm_network.apply(
+            lambda x: weighted_avg_and_std(x['list_cyclecount_count'], x['list_length_cycle']), axis=1)
+        osm_network[['cyclecount_count', 'cyclecount_count_std']] = osm_network.apply(
+            lambda x: weighted_avg_and_std(x['list_cyclecount_count'], x['list_length_cycle']), axis=1)
         return osm_network
 
     @staticmethod

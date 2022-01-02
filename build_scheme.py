@@ -288,13 +288,13 @@ if __name__ == '__main__':
                         {'cycle_count': False, 'car_count': False, 'merge_files': False, 'data_to_server_car': False,
                          'data_to_server_cycle': True}],
               'incident': [False, {'prepare_incident': False, 'data_to_server': True}],
-              'count_osm': [False,
+              'count_osm': [True,
                             {'prepare_overlay': False, 'matching': False, 'two_ways_matching': False, 'refine_matching':
                                 False, 'matching_incidents': False, 'matching_to_osm_counting': True,
                              'matching_to_osm_incidents': True
                              }],
               'munich_data': [False, {'table_for_server': True}],
-              'analysis': [True, {'osm_network_local_network': False, 'analysis_relations': True}],
+              'analysis': [False, {'osm_network_local_network': False, 'analysis_relations': True}],
               'data_to_server': [False, {'osm': True, 'bikes': False, 'cars': False, 'incidents': False,
                                          'combined_network': False}]}
 

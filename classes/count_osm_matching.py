@@ -46,7 +46,7 @@ class RoadMatching(Matching):
         if pair[0] == -1:
             return row['osm_walcycdata_id']
         is_opposite_angle = abs(row.azimuth - osm_object.azimuth.values[0])
-        if 30 < is_opposite_angle < 350:
+        if 30 < is_opposite_angle < 330:
             # Select the opposite direction
             if len(pair) == 1:
                 return pair[0]
