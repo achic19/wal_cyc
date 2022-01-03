@@ -152,13 +152,15 @@ class OSM(MunichData):
             (local_matching_network['carcount_count'] > 0) & (local_matching_network['cyclecount_count'] > 0) & (
                     local_matching_network['osm_walcycdata_id'] != -1)]
         # Add four new two columns sum and time
-        avg_count_columns_names = ['list_count_cycle', 'list_count_car', 'list_length_cycle', 'list_length_car']
-        avg_count_columns_names_opp = ['list_count_cycle_opposite_dir', 'list_count_car_opposite_dir',
-                                       'list_length_cycle_dir',
-                                       'list_length_car_dir']
+        avg_count_columns_names = ['list_cycle_count', 'list_cycle_length', 'list_car_count', 'list_car_length']
+        avg_count_columns_names_opp = ['list_cycle_count_opp', 'list_cycle_length_opp', 'list_car_count_opp',
+                                       'list_car_length_opp']
 
-        osm_network[avg_count_columns_names] = []
-        osm_network[avg_count_columns_names_opp] = []
+        osm_network[avg_count_columns_names] = [[[] for _ in range(len(avg_count_columns_names))] for _ in
+                                                range(len(osm_network))]
+        osm_network[avg_count_columns_names_opp] = [[[] for _ in range(len(avg_count_columns_names_opp))] for _ in
+                                                    range(len(osm_network))]
+        local_matching_network['length'] = local_matching_network.length
 
         def calculate_counting(row):
             # The method add count information based on the date in row
@@ -181,8 +183,8 @@ class OSM(MunichData):
                         osm_network.at[osm_id, columns_to_update[0]].append(row['cyclecount_count'])
                         osm_network.at[osm_id, columns_to_update[1]].append(row.length)
                     if row['carcount_count'] > 0:
-                        osm_network.at[osm_id, columns_to_update[0]].append(row['carcount_count'])
-                        osm_network.at[osm_id, columns_to_update[1]].append(row.length)
+                        osm_network.at[osm_id, columns_to_update[2]].append(row['carcount_count'])
+                        osm_network.at[osm_id, columns_to_update[3]].append(row.length)
 
                 osm_azimuth = osm_network.at[osm_id, 'azimuth']
                 is_opposite_angle = abs(row.azimuth - osm_azimuth)
@@ -195,9 +197,10 @@ class OSM(MunichData):
             [find_direction_update(item) for item in row['osm_ids']]
 
         # loop over each filtered matching network:
+        print('__calculate_counting for osm')
         local_matching_network.apply(calculate_counting, axis=1)
+
         # calculate average
-        print('__calculate average')
 
         def weighted_avg_and_std(values, weights):
             """
@@ -206,22 +209,31 @@ class OSM(MunichData):
             values, weights -- Numpy ndarrays with the same shape.
             """
             if len(values) == 0:
-                return [0, 0]
+                return 0, 0
             if len(values) == 1:
-                return [values[0], 0]
+                return values[0], 0
             average = np.average(values, weights=weights)
             # Fast and numerically precise:
             variance = np.average((values - average) ** 2, weights=weights)
-            return [average, sqrt(variance)]
+            return average, sqrt(variance)
 
-        osm_network[['cyclecount_count', 'cyclecount_count_std']] = osm_network.apply(
-            lambda x: weighted_avg_and_std(x['list_cyclecount_count'], x['list_length_cycle']), axis=1)
-        osm_network[['cyclecount_count_dir', 'cyclecount_count_std_dir']] = osm_network.apply(
-            lambda x: weighted_avg_and_std(x['list_cyclecount_count'], x['list_length_cycle']), axis=1)
-        osm_network[['cyclecount_count', 'cyclecount_count_std']] = osm_network.apply(
-            lambda x: weighted_avg_and_std(x['list_cyclecount_count'], x['list_length_cycle']), axis=1)
-        osm_network[['cyclecount_count', 'cyclecount_count_std']] = osm_network.apply(
-            lambda x: weighted_avg_and_std(x['list_cyclecount_count'], x['list_length_cycle']), axis=1)
+        print('__calculate average_std')
+
+        osm_network[['cycle_count', 'cycle_count_std']] = list(osm_network.apply(
+            lambda x: weighted_avg_and_std(x['list_cycle_count'], x['list_cycle_length']), axis=1))
+
+        osm_network[['cycle_count_opp', 'cycle_count_std_opp']] = list(osm_network.apply(
+            lambda x: weighted_avg_and_std(x['list_cycle_count_opp'], x['list_cycle_length_opp']), axis=1))
+
+        osm_network[['car_count', 'car_count_std']] = list(osm_network.apply(
+            lambda x: weighted_avg_and_std(x['list_car_count'], x['list_car_length']), axis=1))
+
+        osm_network[['car_count_opp', 'car_count_std_opp']] = list(osm_network.apply(
+            lambda x: weighted_avg_and_std(x['list_car_count_opp'], x['list_car_length_opp']), axis=1))
+
+        print('__drop processing fields')
+        avg_count_columns_names.extend(avg_count_columns_names_opp)
+        osm_network.drop(columns=avg_count_columns_names, inplace=True)
         return osm_network
 
     @staticmethod
@@ -232,12 +244,11 @@ class OSM(MunichData):
         :param local_incidents:
         :return:
         """
-        print('from_incident_to_osm')
+        print('_from_incident_to_osm')
         # make sure osm_id is the index
         osm_network.set_index('osm_id', inplace=True)
         osm_network['num_incidents'] = local_incidents.groupby('osm_walcycdata_id')['index'].count()
         osm_network['num_incidents'] = osm_network['num_incidents'].fillna(0)
-        print('finish from_incident_to_osm')
         return osm_network
 
     @staticmethod

@@ -449,12 +449,14 @@ if __name__ == '__main__':
             refine_matching = gpd.read_file("shp_files/matching_files.gpkg", layer='refine_matching', driver="GPKG")
             my_osm_data = gpd.read_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network')
             res = OSM.from_local_to_osm(my_osm_data, refine_matching)
+            print('_write to disk')
             res.to_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network2')
         if local_params['matching_to_osm_incidents']:
             incidents_matching = gpd.read_file("shp_files/incidents.gpkg", layer='incidents_with_osm_matching',
                                                driver="GPKG")
             my_osm_data = gpd.read_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network2')
             res = OSM.from_incident_to_osm(osm_network=my_osm_data, local_incidents=incidents_matching)
+            print('_write to disk')
             res.to_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network_final')
     if params['munich_data'][0]:
         print('munich_data')
