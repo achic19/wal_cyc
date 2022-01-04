@@ -1,10 +1,12 @@
 from sqlalchemy import create_engine, MetaData
 import sqlalchemy
+from sqlalchemy.engine.base import Engine
 from migrate.changeset.constraint import PrimaryKeyConstraint
 from geopandas import GeoDataFrame
 import pandas as pd
 import geopandas as gpd
 from typing import Tuple
+
 
 class MunichData:
     schema = 'production'
@@ -78,14 +80,14 @@ class MunichData:
     def data_to_server(data_to_upload: GeoDataFrame,
                        columns_to_upload: list,
                        table_name: str,
-                       engine
-                       ):
+                       engine: Engine):
         """
         Upload GeoDataFrame  into schema in engine
         and only with the columns specified in the columns_to_upload parameter
         :param table_name:
         :param data_to_upload:
         :param columns_to_upload:
+        :param engine:
         :return:
         """
 
@@ -104,8 +106,8 @@ class MunichData:
         # define primary key
         print('_define primary key')
         metadata = MetaData(bind=engine, schema=MunichData.schema)
-        my_table = sqlalchemy.Table(table_name, metadata, 
-                        autoload=True)
+        my_table = sqlalchemy.Table(table_name, metadata,
+                                    autoload=True)
         cons = PrimaryKeyConstraint('walcycdata_id', table=my_table)
         cons.create()
 

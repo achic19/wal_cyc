@@ -282,13 +282,13 @@ if __name__ == '__main__':
     engine = create_engine('postgresql://research:1234@34.142.109.94:5432/walcycdata')
     clip_file = gpd.read_file('shp_files/munich_3857.shp')
     # dictionary to control which function to run
-    params = {'osm': [False, {'prepare_osm_data': False, 'osm_file': False, 'data_to_server': True,
-                              'find_the_opposite_roads': False, 'stat_one_way': False}],
+    params = {'osm': [True, {'prepare_osm_data': False, 'osm_file': False, 'data_to_server': True,
+                             'find_the_opposite_roads': False, 'stat_one_way': False}],
               'count': [False,
                         {'cycle_count': False, 'car_count': False, 'merge_files': False, 'data_to_server_car': False,
                          'data_to_server_cycle': True}],
               'incident': [False, {'prepare_incident': False, 'data_to_server': True}],
-              'count_osm': [True,
+              'count_osm': [False,
                             {'prepare_overlay': False, 'matching': False, 'two_ways_matching': False, 'refine_matching':
                                 False, 'matching_incidents': False, 'matching_to_osm_counting': True,
                              'matching_to_osm_incidents': True
@@ -299,6 +299,7 @@ if __name__ == '__main__':
                                          'combined_network': False}]}
 
     if params['osm'][0]:
+        print('osm')
         # Prepare OSM information
         local_params = params['osm'][1]
         if local_params['prepare_osm_data']:
@@ -319,9 +320,10 @@ if __name__ == '__main__':
 
         osm_data = gpd.read_file("shp_files/osm/osm.gpkg", layer='openstreetmap_road_network')
         if local_params['data_to_server']:
-            print("upload osm data")
+            osm_data = gpd.read_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network_final')
+            print('_data_to_server')
             OSM.data_to_server(data_to_upload=osm_data, columns_to_upload=OSM.osm_column_names,
-                               table_name='openstreetmap_road_network')
+                               table_name='openstreetmap_road_network', engine=engine)
         if local_params['find_the_opposite_roads']:
             # The algorithm links two-way roads
             OSM.find_the_opposite_roads(osm_gdf=osm_data).to_file("shp_files/osm/osm.gpkg",
@@ -395,7 +397,7 @@ if __name__ == '__main__':
             my_incident = gpd.read_file("shp_files/incidents.gpkg", layer='incidents_with_osm_matching')
             # ToDo should be deleted
             my_incident.rename(columns={'osm_walcycdata_id': 'osm_id'}, inplace=True)
-            MunichData.data_to_server(my_incident, Incidents.column_names, 'incident_data')
+            MunichData.data_to_server(my_incident, Incidents.column_names, 'incident_data', engine)
 
     if params['count_osm'][0]:
         print('count_osm')
@@ -450,14 +452,14 @@ if __name__ == '__main__':
             my_osm_data = gpd.read_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network')
             res = OSM.from_local_to_osm(my_osm_data, refine_matching)
             print('_write to disk')
-            res.to_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network2')
+            res.to_file("shp_files/osm/osm.gpkg", layer='openstreetmap_road_network2')
         if local_params['matching_to_osm_incidents']:
             incidents_matching = gpd.read_file("shp_files/incidents.gpkg", layer='incidents_with_osm_matching',
                                                driver="GPKG")
-            my_osm_data = gpd.read_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network2')
+            my_osm_data = gpd.read_file("shp_files//osm/osm.gpkg", layer='openstreetmap_road_network2')
             res = OSM.from_incident_to_osm(osm_network=my_osm_data, local_incidents=incidents_matching)
             print('_write to disk')
-            res.to_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network_final')
+            res.to_file("shp_files//osm/osm.gpkg", layer='openstreetmap_road_network_final')
     if params['munich_data'][0]:
         print('munich_data')
         local_params = params['munich_data'][1]
