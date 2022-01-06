@@ -282,8 +282,8 @@ if __name__ == '__main__':
     engine = create_engine('postgresql://research:1234@34.142.109.94:5432/walcycdata')
     clip_file = gpd.read_file('shp_files/munich_3857.shp')
     # dictionary to control which function to run
-    params = {'osm': [True, {'prepare_osm_data': False, 'osm_file': False, 'data_to_server': True,
-                             'find_the_opposite_roads': False, 'stat_one_way': False}],
+    params = {'osm': [False, {'prepare_osm_data': False, 'osm_file': False, 'data_to_server': True,
+                              'find_the_opposite_roads': False, 'stat_one_way': False}],
               'count': [False,
                         {'cycle_count': False, 'car_count': False, 'merge_files': False, 'data_to_server_car': False,
                          'data_to_server_cycle': True}],
@@ -293,7 +293,7 @@ if __name__ == '__main__':
                                 False, 'matching_incidents': False, 'matching_to_osm_counting': True,
                              'matching_to_osm_incidents': True
                              }],
-              'munich_data': [False, {'table_for_server': True}],
+              'munich_data': [True, {'prepare_relations': False, 'relations_for_server': True}],
               'analysis': [False, {'osm_network_local_network': False, 'analysis_relations': True}],
               'data_to_server': [False, {'osm': True, 'bikes': False, 'cars': False, 'incidents': False,
                                          'combined_network': False}]}
@@ -461,17 +461,28 @@ if __name__ == '__main__':
             print('_write to disk')
             res.to_file("shp_files//osm/osm.gpkg", layer='openstreetmap_road_network_final')
     if params['munich_data'][0]:
+        import copy
+
         print('munich_data')
         local_params = params['munich_data'][1]
-        if local_params['table_for_server']:
-            print('_table_for_server')
+        if local_params['prepare_relations']:
+            print('_prepare_relations')
             refine_matching = gpd.read_file("shp_files/matching_files.gpkg", layer='refine_matching', driver="GPKG")
-            cycle, cars = MunichData.table_for_server(based_data=refine_matching)
+            cycle, cars = MunichData.prepare_relations(based_data=refine_matching)
             print('__write results into disk')
             cycle['geometry'] = None
             cars['geometry'] = None
             cycle.to_file("shp_files/munich_data.gpkg", layer='matching_cycle')
             cars.to_file("shp_files/munich_data.gpkg", layer='matching_car')
+        if local_params['relations_for_server']:
+            print('_relations_for_server')
+            gpd_files = {'relations_cycles': gpd.read_file("shp_files/munich_data.gpkg", layer='matching_cycle'),
+                         'relations_cars': gpd.read_file("shp_files/munich_data.gpkg", layer='matching_car')}
+            [MunichData.data_to_server(data_to_upload=gpd_file[1],
+                                       columns_to_upload=copy.copy(DataForServerDictionaries.COLUMNS),
+                                       table_name=gpd_file[0], engine=engine,
+                                       primary_key=DataForServerDictionaries.PRIMARY_COLUMNS) for gpd_file in
+             gpd_files.items()]
 
     if params['analysis'][0]:
         print('analysis')

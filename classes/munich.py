@@ -30,7 +30,7 @@ class MunichData:
         return clipped[~clipped.is_empty][file.columns]
 
     @staticmethod
-    def table_for_server(based_data: GeoDataFrame) -> Tuple[GeoDataFrame, GeoDataFrame]:
+    def prepare_relations(based_data: GeoDataFrame) -> Tuple[GeoDataFrame, GeoDataFrame]:
         """
         Create two new table that keep only the cycle_id and car_id with the matching osm
         :param based_data:
@@ -80,7 +80,8 @@ class MunichData:
     def data_to_server(data_to_upload: GeoDataFrame,
                        columns_to_upload: list,
                        table_name: str,
-                       engine: Engine):
+                       engine: Engine,
+                       primary_key='walcycdata_id'):
         """
         Upload GeoDataFrame  into schema in engine
         and only with the columns specified in the columns_to_upload parameter
@@ -88,6 +89,8 @@ class MunichData:
         :param data_to_upload:
         :param columns_to_upload:
         :param engine:
+        :param primary_key: for the original table, 'walcycdata_id' field is the primary one.
+        For the new table the primary key is different
         :return:
         """
 
@@ -100,20 +103,33 @@ class MunichData:
         data_to_upload['walcycdata_last_modified'] = MunichData.date
         # upload data
         print('_upload data')
-        data_to_upload.to_postgis(name=table_name, con=engine, schema=MunichData.schema,
+        if type(data_to_upload) is GeoDataFrame:
+            data_to_upload.to_postgis(name=table_name, con=engine, schema=MunichData.schema,
+                                      if_exists='replace',
+                                      dtype={'walcycdata_last_modified': sqlalchemy.types.DateTime})
+        else:
+            data_to_upload.to_sql(name=table_name, con=engine, schema=MunichData.schema,
                                   if_exists='replace',
                                   dtype={'walcycdata_last_modified': sqlalchemy.types.DateTime})
+
         # define primary key
         print('_define primary key')
         metadata = MetaData(bind=engine, schema=MunichData.schema)
         my_table = sqlalchemy.Table(table_name, metadata,
                                     autoload=True)
-        cons = PrimaryKeyConstraint('walcycdata_id', table=my_table)
+        if isinstance(primary_key, list):
+            cons = PrimaryKeyConstraint(primary_key[0], primary_key[1], table=my_table)
+        else:
+            cons = PrimaryKeyConstraint(primary_key, table=my_table)
         cons.create()
 
         # define fields as not null
         print('_define fields as not null')
-        columns_to_upload.remove('walcycdata_id')
+        if isinstance(primary_key, list):
+            columns_to_upload.remove(primary_key[0])
+            columns_to_upload.remove(primary_key[1])
+        else:
+            columns_to_upload.remove(primary_key)
         for colname in columns_to_upload:
             col = sqlalchemy.Column(colname, metadata)
             col.alter(nullable=False, table=my_table)
@@ -123,6 +139,8 @@ class DataForServerDictionaries:
     """
     this class helps to organise data for matching tables in server
     """
+    COLUMNS = ['walcycdata_id', 'osm_id', 'start_point_id', 'end_point_id']
+    PRIMARY_COLUMNS = ['walcycdata_id', 'osm_id']
 
     def __init__(self):
         # index store the relation to the refined network
