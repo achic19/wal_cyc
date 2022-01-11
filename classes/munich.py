@@ -1,7 +1,7 @@
 from sqlalchemy import create_engine, MetaData
 import sqlalchemy
 from sqlalchemy.engine.base import Engine
-from migrate.changeset.constraint import PrimaryKeyConstraint
+from migrate.changeset.constraint import PrimaryKeyConstraint, ForeignKeyConstraint
 from geopandas import GeoDataFrame
 import pandas as pd
 import geopandas as gpd
@@ -81,7 +81,10 @@ class MunichData:
                        columns_to_upload: list,
                        table_name: str,
                        engine: Engine,
-                       primary_key='walcycdata_id'):
+                       primary_key='walcycdata_id',
+                       foreign_key=False,
+                       not_null=True,
+                       *args):
         """
         Upload GeoDataFrame  into schema in engine
         and only with the columns specified in the columns_to_upload parameter
@@ -91,6 +94,9 @@ class MunichData:
         :param engine:
         :param primary_key: for the original table, 'walcycdata_id' field is the primary one.
         For the new table the primary key is different
+        :param foreign_key: for tables with foreign keys
+        :param not_null: not all tables all the columns should be not null
+        :param args: more information about foreign keys
         :return:
         """
 
@@ -122,17 +128,27 @@ class MunichData:
         else:
             cons = PrimaryKeyConstraint(primary_key, table=my_table)
         cons.create()
-
+        # define foreign keys
+        if foreign_key:
+            print('_define foreign_keys')
+            foreign_table = sqlalchemy.Table(args[0], metadata,
+                                             autoload=True)
+            cols = [my_table._columns[col] for col in args[1].keys()]
+            fore_cols = [foreign_table._columns[col] for col in args[1].values()]
+            for i in range(len(cols)):
+                cons = ForeignKeyConstraint([cols[i]], [fore_cols[i]])
+                cons.create()
         # define fields as not null
         print('_define fields as not null')
-        if isinstance(primary_key, list):
-            columns_to_upload.remove(primary_key[0])
-            columns_to_upload.remove(primary_key[1])
-        else:
-            columns_to_upload.remove(primary_key)
-        for colname in columns_to_upload:
-            col = sqlalchemy.Column(colname, metadata)
-            col.alter(nullable=False, table=my_table)
+        if not_null:
+            if isinstance(primary_key, list):
+                columns_to_upload.remove(primary_key[0])
+                columns_to_upload.remove(primary_key[1])
+            else:
+                columns_to_upload.remove(primary_key)
+            for colname in columns_to_upload:
+                col = sqlalchemy.Column(colname, metadata)
+                col.alter(nullable=False, table=my_table)
 
 
 class DataForServerDictionaries:
@@ -161,13 +177,13 @@ class DataForServerDictionaries:
         else:
             # The first projection point belongs only to the first match
             self.__update_dictionaries(index=row['index'], walcycdata_id=row[field], osm_id=row['osm_ids'][0],
-                                       start_point_id=row['start_point_id'], end_point_id=-1)
+                                       start_point_id=row['start_point_id'], end_point_id=None)
             for item in row['osm_ids'][1:-1]:
                 self.__update_dictionaries(index=row['index'], walcycdata_id=row[field], osm_id=item,
-                                           start_point_id=-1, end_point_id=-1)
+                                           start_point_id=None, end_point_id=None)
             # The last projection point belongs only to the first match
             self.__update_dictionaries(index=row['index'], walcycdata_id=row[field], osm_id=row['osm_ids'][-1],
-                                       start_point_id=-1, end_point_id=row['end_point_id'])
+                                       start_point_id=None, end_point_id=row['end_point_id'])
 
     def __update_dictionaries(self, index, walcycdata_id, osm_id, start_point_id, end_point_id):
         """

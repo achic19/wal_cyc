@@ -20,7 +20,8 @@ def grant_select_permissions_to_guest(engine):
 
 
 def create_wkt_and_index(engine):
-    name_table_to_update = ['car_count_data', 'cycle_count_data', 'incident_data', 'openstreetmap_road_network']
+    name_table_to_update = ['car_count_data', 'cycle_count_data', 'incident_data', 'openstreetmap_road_network',
+                            'projection_points']
     inspector = inspect(engine)
     for table_name in inspector.get_table_names(schema=PRODUCTION_SCHEME):
         if table_name in name_table_to_update:
@@ -29,7 +30,11 @@ def create_wkt_and_index(engine):
             table.to_crs(crs="EPSG:4326", inplace=True)
             if 'wkt' not in table.columns:
                 table['wkt'] = table.geometry.astype(str)
-                munich.MunichData.data_to_server(table, table.columns.to_list(), table_name, engine)
+                if table_name == 'projection_points':
+                    munich.MunichData.data_to_server(table, table.columns.to_list(), table_name, engine,
+                                                     primary_key='pnt_id')
+                else:
+                    munich.MunichData.data_to_server(table, table.columns.to_list(), table_name, engine)
             if not is_table_has_spatial_index(table_name, inspector):
                 with engine.connect() as connection:
                     result = connection.execute(

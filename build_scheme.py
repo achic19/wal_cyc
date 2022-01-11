@@ -293,7 +293,8 @@ if __name__ == '__main__':
                                 False, 'matching_incidents': False, 'matching_to_osm_counting': True,
                              'matching_to_osm_incidents': True
                              }],
-              'munich_data': [True, {'prepare_relations': False, 'relations_for_server': True}],
+              'munich_data': [True, {'prepare_relations': True, 'add_projection_points_to_server': False,
+                                     'relations_for_server': True}],
               'analysis': [False, {'osm_network_local_network': False, 'analysis_relations': True}],
               'data_to_server': [False, {'osm': True, 'bikes': False, 'cars': False, 'incidents': False,
                                          'combined_network': False}]}
@@ -470,18 +471,26 @@ if __name__ == '__main__':
             refine_matching = gpd.read_file("shp_files/matching_files.gpkg", layer='refine_matching', driver="GPKG")
             cycle, cars = MunichData.prepare_relations(based_data=refine_matching)
             print('__write results into disk')
-            cycle['geometry'] = None
+            cycle['geometry'] = None,
             cars['geometry'] = None
+            # change start_point_id and end_point_id to int
             cycle.to_file("shp_files/munich_data.gpkg", layer='matching_cycle')
             cars.to_file("shp_files/munich_data.gpkg", layer='matching_car')
+        if local_params['add_projection_points_to_server']:
+            print('add_projection_points_to_server')
+            gdf_file = gpd.read_file("shp_files/matching_files.gpkg", layer='refine_matching_pnts', driver="GPKG")
+            MunichData.data_to_server(data_to_upload=gdf_file, columns_to_upload=['pnt_id', 'geometry'],
+                                      table_name='projection_points', engine=engine, primary_key='pnt_id')
         if local_params['relations_for_server']:
             print('_relations_for_server')
             gpd_files = {'relations_cycles': gpd.read_file("shp_files/munich_data.gpkg", layer='matching_cycle'),
                          'relations_cars': gpd.read_file("shp_files/munich_data.gpkg", layer='matching_car')}
-            [MunichData.data_to_server(data_to_upload=gpd_file[1],
-                                       columns_to_upload=copy.copy(DataForServerDictionaries.COLUMNS),
-                                       table_name=gpd_file[0], engine=engine,
-                                       primary_key=DataForServerDictionaries.PRIMARY_COLUMNS) for gpd_file in
+            [MunichData.data_to_server(gpd_file[1],
+                                       copy.copy(DataForServerDictionaries.COLUMNS),
+                                       gpd_file[0], engine,
+                                       DataForServerDictionaries.PRIMARY_COLUMNS,
+                                       True, False, 'projection_points',
+                                       {'start_point_id': 'pnt_id', 'end_point_id': 'pnt_id'}) for gpd_file in
              gpd_files.items()]
 
     if params['analysis'][0]:
