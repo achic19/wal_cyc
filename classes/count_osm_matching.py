@@ -185,7 +185,8 @@ class RefineMatching(MunichData):
             osm_az = osm_object.azimuth
             if osm_az == -1:
                 # the matching osm object has circular feature
-                return -2, -2, -2
+                # ToDo manage circular objects
+                return -1, row.osm_walcycdata_id, -1
             # First, if necessary, reverse the local object to be in the same direction as the osm object
             angle = abs(row.azimuth - osm_az)
             try:
@@ -229,7 +230,6 @@ class RefineMatching(MunichData):
 
         self.data['osm_ids'] = self.data['osm_ids'].apply(
             lambda x: ','.join(map(str, x)) if isinstance(x, list) else str(x))
-        #ToDo null fo -1 or null
 
     def __project_pnt_osm_obj(self, pnt: tuple, ind: int):
         """

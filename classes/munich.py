@@ -138,9 +138,10 @@ class MunichData:
             for i in range(len(cols)):
                 cons = ForeignKeyConstraint([cols[i]], [fore_cols[i]])
                 cons.create()
+
         # define fields as not null
-        print('_define fields as not null')
         if not_null:
+            print('_define fields as not null')
             if isinstance(primary_key, list):
                 columns_to_upload.remove(primary_key[0])
                 columns_to_upload.remove(primary_key[1])

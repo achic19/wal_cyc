@@ -293,7 +293,7 @@ if __name__ == '__main__':
                                 False, 'matching_incidents': False, 'matching_to_osm_counting': True,
                              'matching_to_osm_incidents': True
                              }],
-              'munich_data': [True, {'prepare_relations': True, 'add_projection_points_to_server': False,
+              'munich_data': [True, {'prepare_relations': False, 'add_projection_points_to_server': False,
                                      'relations_for_server': True}],
               'analysis': [False, {'osm_network_local_network': False, 'analysis_relations': True}],
               'data_to_server': [False, {'osm': True, 'bikes': False, 'cars': False, 'incidents': False,
@@ -485,6 +485,12 @@ if __name__ == '__main__':
             print('_relations_for_server')
             gpd_files = {'relations_cycles': gpd.read_file("shp_files/munich_data.gpkg", layer='matching_cycle'),
                          'relations_cars': gpd.read_file("shp_files/munich_data.gpkg", layer='matching_car')}
+            # ToDo should be deleted for future code
+            gpd_files['relations_cycles'] = gpd_files['relations_cycles'][
+                gpd_files['relations_cycles']['start_point_id'] != -2]
+            gpd_files['relations_cars'] = gpd_files['relations_cars'][
+                gpd_files['relations_cars']['start_point_id'] != -2]
+
             [MunichData.data_to_server(gpd_file[1],
                                        copy.copy(DataForServerDictionaries.COLUMNS),
                                        gpd_file[0], engine,
