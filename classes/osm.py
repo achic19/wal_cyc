@@ -150,8 +150,8 @@ class OSM(MunichData):
         local_matching_network['carcount_count'] = local_matching_network['carcount_count'].fillna(0)
         #  Use only rows from local_matching_network with counting and with matching OSM,
         local_matching_network = local_matching_network[
-            (local_matching_network['carcount_count'] > 0) & (local_matching_network['cyclecount_count'] > 0) & (
-                    local_matching_network['osm_walcycdata_id'] != -1)]
+            (local_matching_network['osm_walcycdata_id'] != -1) &
+            ((local_matching_network['carcount_count'] > 0) | (local_matching_network['cyclecount_count'] > 0))]
         # Add four new two columns sum and time
         avg_count_columns_names = ['list_cycle_count', 'list_cycle_length', 'list_car_count', 'list_car_length']
         avg_count_columns_names_opp = ['list_cycle_count_opp', 'list_cycle_length_opp', 'list_car_count_opp',
@@ -173,6 +173,9 @@ class OSM(MunichData):
                 :param osm_id:
                 :return:
                 """
+                # ToDo should be deleted
+                if osm_id == -2:
+                    osm_id = row['osm_walcycdata_id']
 
                 def count_per_row(columns_to_update: list):
                     """
@@ -199,6 +202,7 @@ class OSM(MunichData):
 
         # loop over each filtered matching network:
         print('__calculate_counting for osm')
+
         local_matching_network.apply(calculate_counting, axis=1)
 
         # calculate average
@@ -299,6 +303,35 @@ class OSM(MunichData):
                 return row['osm_id_2']
             else:
                 return []
+
+    @staticmethod
+    def osm_data_to_osm_counting_with_dir(db: GeoDataFrame):
+        print('__osm_data_to_osm_counting_with_dir')
+
+        def find_osm_nodes_add_info_db_dict(row):
+            osm_id = row['osm_id']
+            pnts = [row['from'], row['to']]
+            db_dictionary['osm_id'].extend([osm_id, osm_id])
+            db_dictionary['from_osm'].extend(pnts)
+            pnts.reverse()
+            db_dictionary['to_osm'].extend(pnts)
+
+            db_dictionary['cycle_count'].extend([row['cycle_count'], row['cycle_count_opp']])
+            db_dictionary['cycle_count_std'].extend([row['cycle_count_std'], row['cycle_count_std_opp']])
+
+            db_dictionary['car_count'].extend([row['car_count'], row['car_count_opp']])
+            db_dictionary['car_count_std'].extend([row['car_count_std'], row['car_count_std_opp']])
+
+            db_dictionary['num_incidents'].extend([row['num_incidents'], row['num_incidents']])
+            db_dictionary['geometry'].extend([row['geometry'], row['geometry']])
+
+        db_dictionary = {'osm_id': [], 'from_osm': [], 'to_osm': [], 'cycle_count': [], 'cycle_count_std': [],
+                         'car_count': [],
+                         'car_count_std': [], 'num_incidents': [], 'geometry': []}
+        db.apply(find_osm_nodes_add_info_db_dict, axis=1)
+        print('__create_new_geodateframe')
+        db_new = GeoDataFrame(db_dictionary, crs=db.crs)
+        return db_new
 
 
 class OSMAsObject(MunichData):

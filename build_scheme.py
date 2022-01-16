@@ -282,19 +282,20 @@ if __name__ == '__main__':
     engine = create_engine('postgresql://research:1234@34.142.109.94:5432/walcycdata')
     clip_file = gpd.read_file('shp_files/munich_3857.shp')
     # dictionary to control which function to run
-    params = {'osm': [False, {'prepare_osm_data': False, 'osm_file': False, 'data_to_server': True,
-                              'find_the_opposite_roads': False, 'stat_one_way': False}],
+    params = {'osm': [True, {'prepare_osm_data': False, 'osm_file': False, 'data_to_server': True,
+                              'find_the_opposite_roads': False, 'stat_one_way': False, 'osm_nodes_to_server': False,
+                              'create_table_of_counting': True, 'table_of_counting_to_server': True}],
               'count': [False,
-                        {'cycle_count': False, 'car_count': False, 'merge_files': False, 'data_to_server_car': False,
+                        {'cycle_count': False, 'car_count': False, 'merge_files': False, 'data_to_server_car': True,
                          'data_to_server_cycle': True}],
-              'incident': [False, {'prepare_incident': False, 'data_to_server': True}],
-              'count_osm': [False,
+              'incident': [True, {'prepare_incident': False, 'data_to_server': True}],
+              'count_osm': [True,
                             {'prepare_overlay': False, 'matching': False, 'two_ways_matching': False, 'refine_matching':
                                 False, 'matching_incidents': False, 'matching_to_osm_counting': True,
                              'matching_to_osm_incidents': True
                              }],
               'munich_data': [True, {'prepare_relations': False, 'add_projection_points_to_server': False,
-                                     'relations_for_server': True}],
+                                     'relations_for_server': True, 'draw_db': True}],
               'analysis': [False, {'osm_network_local_network': False, 'analysis_relations': True}],
               'data_to_server': [False, {'osm': True, 'bikes': False, 'cars': False, 'incidents': False,
                                          'combined_network': False}]}
@@ -321,10 +322,10 @@ if __name__ == '__main__':
 
         osm_data = gpd.read_file("shp_files/osm/osm.gpkg", layer='openstreetmap_road_network')
         if local_params['data_to_server']:
-            osm_data = gpd.read_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network_final')
+            osm_data = gpd.read_file("shp_files//osm/osm.gpkg", layer='openstreetmap_road_network_final')
             print('_data_to_server')
             OSM.data_to_server(data_to_upload=osm_data, columns_to_upload=OSM.osm_column_names,
-                               table_name='openstreetmap_road_network', engine=engine)
+                               table_name='openstreetmap_road_network', engine=engine, is_unique=True, unique='osm_id')
         if local_params['find_the_opposite_roads']:
             # The algorithm links two-way roads
             OSM.find_the_opposite_roads(osm_gdf=osm_data).to_file("shp_files/osm/osm.gpkg",
@@ -335,10 +336,33 @@ if __name__ == '__main__':
             res = OSM.statistic(osm_data)
             file_name = '"shp_files/osm/stat_one_way.csv'
             res.to_csv(file_name)
+        if local_params['osm_nodes_to_server']:
+            print('osm_nodes_to_server')
+            osm_data = gpd.read_file("shp_files/osm/osm.gpkg", layer='openstreetmap_data_nodes')
+            OSM.data_to_server(data_to_upload=osm_data, columns_to_upload=['id', 'geometry'],
+                               table_name='openstreetmap_data_nodes', engine=engine, primary_key='id')
+        if local_params['create_table_of_counting']:
+            print('_create_table_of_counting')
+            osm_data = gpd.read_file("shp_files//osm/osm.gpkg", layer='openstreetmap_road_network_final')
+            OSM.osm_data_to_osm_counting_with_dir(osm_data).to_file("shp_files//osm/osm.gpkg",
+                                                                    layer='table_of_counting_osm')
+        if local_params['table_of_counting_to_server']:
+            print('_table_of_counting_to_server')
+            data_to_upload = gpd.read_file("shp_files//osm/osm.gpkg", layer='table_of_counting_osm')
+            col_list = list(data_to_upload.columns)
+            col_list.remove('geometry')
+            OSM.data_to_server(data_to_upload=data_to_upload,
+                               columns_to_upload=col_list,
+                               table_name='osm_with_counting', engine=engine,
+                               is_foreign_key=True,
+                               foreign_ref_dict={'openstreetmap_road_network': {'osm_id': 'osm_id'},
+                                                 'openstreetmap_data_nodes': {'from_osm': 'id',
+                                                                              'to_osm': 'id'},
+                                                 })
 
     if params['count'][0]:
         local_params = params['count'][1]
-
+        fore_dicts = {'openstreetmap_road_network': {'osm_id': 'osm_id'}}
         if local_params['cycle_count']:
             print('create cycle_count table')
             # upload files
@@ -364,7 +388,8 @@ if __name__ == '__main__':
         if local_params['merge_files']:
             print('merge file')
             cycle = gpd.read_file("shp_files/pr_data.gpkg", layer='cycle_count')[
-                ['walcycdata_id', 'cyclecount_id', 'cyclecount_count', 'azimuth', 'FROMNODENO', 'TONODENO', 'geometry']]
+                ['walcycdata_id', 'cyclecount_id', 'cyclecount_count', 'azimuth', 'FROMNODENO', 'TONODENO',
+                 'geometry']]
             car = gpd.read_file("shp_files/pr_data.gpkg", layer='car_count')[
                 ['walcycdata_id', 'carcount_id', 'carcount_count', 'azimuth', 'FROMNODENO', 'TONODENO', 'geometry']]
             all_count = merge_users_network(cycle_merge=cycle, car_merge=car)
@@ -378,7 +403,7 @@ if __name__ == '__main__':
             data['carcount_count'] = data['carcount_count'].fillna(0)
             data['osm_id'] = data['osm_id'].fillna(0)
             Counting.data_to_server(data_to_upload=data, columns_to_upload=CarCount.column_names(),
-                                    table_name='car_count_data')
+                                    table_name='car_count_data', engine=engine)
         if local_params['data_to_server_cycle']:
             print("upload cycle data")
             data = gpd.read_file("shp_files/pr_data.gpkg", layer='cycle_count2', driver="GPKG")
@@ -386,7 +411,7 @@ if __name__ == '__main__':
             data.rename(columns={'osm_walcycdata_id': 'osm_id'}, inplace=True)
             data['osm_id'] = data['osm_id'].fillna(0)
             Counting.data_to_server(data_to_upload=data, columns_to_upload=CycleCount.column_names(),
-                                    table_name='cycle_count_data')
+                                    table_name='cycle_count_data', engine=engine)
     if params['incident'][0]:
         print('work on incident data')
         local_params = params['incident'][1]
@@ -396,9 +421,10 @@ if __name__ == '__main__':
         if local_params['data_to_server']:
             print('_data_to_server')
             my_incident = gpd.read_file("shp_files/incidents.gpkg", layer='incidents_with_osm_matching')
-            # ToDo should be deleted
             my_incident.rename(columns={'osm_walcycdata_id': 'osm_id'}, inplace=True)
-            MunichData.data_to_server(my_incident, Incidents.column_names, 'incident_data', engine)
+            MunichData.data_to_server(my_incident, Incidents.column_names, 'incident_data', engine,
+                                      is_foreign_key=True,
+                                      foreign_ref_dict={'openstreetmap_road_network': {'osm_id': 'osm_id'}})
 
     if params['count_osm'][0]:
         print('count_osm')
@@ -408,7 +434,8 @@ if __name__ == '__main__':
             print('start overlay')
             osm_data = gpd.read_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network')
             osm_data_columns = ['osm_id', 'highway', 'osm_fclass_hir', 'azimuth']
-            count_columns = ['index', 'walcycdata_id_cycle', 'walcycdata_id_car', 'cyclecount_count', 'carcount_count',
+            count_columns = ['index', 'walcycdata_id_cycle', 'walcycdata_id_car', 'cyclecount_count',
+                             'carcount_count',
                              'azimuth']
             results = overlay_count_osm(osm_gdf=osm_data, local_network=count_data, osm_columns=osm_data_columns,
                                         local_columns=count_columns)
@@ -417,7 +444,8 @@ if __name__ == '__main__':
         if local_params['matching']:
             print('_matching')
             osm_munich_overlay = gpd.read_file('shp_files/matching_files.gpkg', layer='overlay')
-            map_matching(overlay=osm_munich_overlay, file_count_to_update=count_data, groupby_field='index').to_file(
+            map_matching(overlay=osm_munich_overlay, file_count_to_update=count_data,
+                         groupby_field='index').to_file(
                 "shp_files/matching_files.gpkg", layer='count_osm_matching')
         if local_params['two_ways_matching']:
             print('_two_ways_matching')
@@ -440,14 +468,16 @@ if __name__ == '__main__':
             incidents_matchings = IncidentsMatching(local_matching_osm=my_matching_data, osm=my_osm_data)
             osm_data_columns = ['osm_id', 'highway']
             count_columns = ['walcycdata_id']
-            results = incidents_matchings.overlay_count_osm(osm_columns=osm_data_columns, local_columns=count_columns)
+            results = incidents_matchings.overlay_count_osm(osm_columns=osm_data_columns,
+                                                            local_columns=count_columns)
             print('_finish overlay')
             [item[1].to_file("shp_files/incidents.gpkg", layer=item[0]) for item in results.items()]
 
             print('_matching_implementation')
             incidents_overlay = gpd.read_file('shp_files/incidents.gpkg', layer='overlay')
             incidents_matchings.map_matching(overlay=incidents_overlay, groupby_field='walcycdata_id')
-            incidents_matchings.osm_matching.to_file("shp_files/incidents.gpkg", layer='incidents_with_osm_matching')
+            incidents_matchings.osm_matching.to_file("shp_files/incidents.gpkg",
+                                                     layer='incidents_with_osm_matching')
         if local_params['matching_to_osm_counting']:
             refine_matching = gpd.read_file("shp_files/matching_files.gpkg", layer='refine_matching', driver="GPKG")
             my_osm_data = gpd.read_file("shp_files/pr_data.gpkg", layer='openstreetmap_road_network')
@@ -461,6 +491,7 @@ if __name__ == '__main__':
             res = OSM.from_incident_to_osm(osm_network=my_osm_data, local_incidents=incidents_matching)
             print('_write to disk')
             res.to_file("shp_files//osm/osm.gpkg", layer='openstreetmap_road_network_final')
+
     if params['munich_data'][0]:
         import copy
 
@@ -471,33 +502,40 @@ if __name__ == '__main__':
             refine_matching = gpd.read_file("shp_files/matching_files.gpkg", layer='refine_matching', driver="GPKG")
             cycle, cars = MunichData.prepare_relations(based_data=refine_matching)
             print('__write results into disk')
-            cycle['geometry'] = None,
-            cars['geometry'] = None
             # change start_point_id and end_point_id to int
             cycle.to_file("shp_files/munich_data.gpkg", layer='matching_cycle')
             cars.to_file("shp_files/munich_data.gpkg", layer='matching_car')
         if local_params['add_projection_points_to_server']:
             print('add_projection_points_to_server')
             gdf_file = gpd.read_file("shp_files/matching_files.gpkg", layer='refine_matching_pnts', driver="GPKG")
+            gdf_file = gdf_file.astype({'pnt_id': float})
             MunichData.data_to_server(data_to_upload=gdf_file, columns_to_upload=['pnt_id', 'geometry'],
                                       table_name='projection_points', engine=engine, primary_key='pnt_id')
         if local_params['relations_for_server']:
             print('_relations_for_server')
             gpd_files = {'relations_cycles': gpd.read_file("shp_files/munich_data.gpkg", layer='matching_cycle'),
                          'relations_cars': gpd.read_file("shp_files/munich_data.gpkg", layer='matching_car')}
-            # ToDo should be deleted for future code
-            gpd_files['relations_cycles'] = gpd_files['relations_cycles'][
-                gpd_files['relations_cycles']['start_point_id'] != -2]
-            gpd_files['relations_cars'] = gpd_files['relations_cars'][
-                gpd_files['relations_cars']['start_point_id'] != -2]
+            spec_for_table_names = ['cycle_count_data', 'car_count_data']
+            # ToDo should be updated for future code
+            gpd_files['relations_cycles'] = gpd_files['relations_cycles'].astype(
+                {'walcycdata_id': int, 'osm_id': int, 'start_point_id': float, 'end_point_id': float})
+            gpd_files['relations_cars'] = gpd_files['relations_cars'].astype(
+                {'walcycdata_id': int, 'osm_id': int, 'start_point_id': float, 'end_point_id': float})
 
-            [MunichData.data_to_server(gpd_file[1],
-                                       copy.copy(DataForServerDictionaries.COLUMNS),
-                                       gpd_file[0], engine,
-                                       DataForServerDictionaries.PRIMARY_COLUMNS,
-                                       True, False, 'projection_points',
-                                       {'start_point_id': 'pnt_id', 'end_point_id': 'pnt_id'}) for gpd_file in
-             gpd_files.items()]
+            [MunichData.data_to_server(data_to_upload=gpd_file[1],
+                                       columns_to_upload=copy.copy(DataForServerDictionaries.COLUMNS),
+                                       table_name=gpd_file[0], engine=engine,
+                                       primary_key=DataForServerDictionaries.PRIMARY_COLUMNS,
+                                       is_not_null=False, is_foreign_key=True,
+                                       foreign_ref_dict={
+                                           'projection_points': {'start_point_id': 'pnt_id',
+                                                                 'end_point_id': 'pnt_id'},
+                                           spec_for_table_names[i]: {'walcycdata_id': 'walcycdata_id'},
+                                           'openstreetmap_road_network': {'osm_id': 'osm_id'}}
+                                       ) for i, gpd_file in enumerate(gpd_files.items())]
+        if local_params['draw_db']:
+            print('_draw_db')
+            MunichData.draw_database_diagram(engine)
 
     if params['analysis'][0]:
         print('analysis')
