@@ -16,9 +16,7 @@ class OSM(MunichData):
     # Data
 
     osm_column_names = ['walcycdata_id', 'walcycdata_is_valid', 'walcycdata_last_modified', 'osm_id', 'osm_fclass',
-                        'osm_name', 'osm_oneway', 'osm_maxspeed', 'osm_layer', 'osm_bridge', 'osm_tunnel',
-                        'cycle_count', 'cycle_count_std', 'cycle_count_opp', 'cycle_count_std_opp', 'car_count',
-                        'car_count_std', 'car_count_opp', 'car_count_std_opp', 'num_incidents', 'geometry']
+                        'osm_name', 'osm_oneway', 'osm_maxspeed', 'osm_layer', 'osm_bridge', 'osm_tunnel', 'geometry']
 
     @staticmethod
     def prepare_osm_data(polygon):

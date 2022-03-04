@@ -93,7 +93,7 @@ class CycleCount(Counting):
     def column_names():
         return ['walcycdata_id', 'cyclecount_id',
                 'cyclecount_count', 'walcycdata_is_valid',
-                'walcycdata_last_modified', 'osm_id',
+                'walcycdata_last_modified',
                 'cyclecount_timestamp_start', 'cyclecount_timestamp_end', 'geometry']
 
     @staticmethod
@@ -152,7 +152,7 @@ class CarCount(Counting):
     def column_names():
         return ['walcycdata_id', 'carcount_id',
                 'carcount_count', 'walcycdata_is_valid',
-                'walcycdata_last_modified', 'osm_id',
+                'walcycdata_last_modified',
                 'carcount_timestamp_start', 'carcount_timestamp_end', 'geometry']
 
 

@@ -145,6 +145,7 @@ class MunichData:
         # update the last time data were changed
         print('_update the last time data were changed')
         data_to_upload['walcycdata_last_modified'] = MunichData.date
+        columns_to_upload.append('walcycdata_last_modified')
         # upload data
         print('_upload data')
         if type(data_to_upload) is GeoDataFrame:
@@ -159,13 +160,9 @@ class MunichData:
         my_table = sqlalchemy.Table(table_name, metadata,
                                     autoload=True)
         # define primary key
-        if table_name != 'osm_with_counting':
-            print('_define primary key')
-            if table_name == 'relations_cycles' or table_name == 'relations_cars':
-                cons = PrimaryKeyConstraint(primary_key[0], primary_key[1], table=my_table)
-            else:
-                cons = PrimaryKeyConstraint(primary_key, table=my_table)
-            cons.create()
+        print('_define primary key')
+        cons = PrimaryKeyConstraint(primary_key, table=my_table)
+        cons.create()
 
         # define foreign keys
         if is_foreign_key:
@@ -180,17 +177,15 @@ class MunichData:
                     cons.create()
 
         # define fields as not null
-        if is_not_null:
-            print('_define fields as not null')
-            if table_name != 'osm_with_counting':
-                if isinstance(primary_key, list):
-                    columns_to_upload.remove(primary_key[0])
-                    columns_to_upload.remove(primary_key[1])
-                else:
-                    columns_to_upload.remove(primary_key)
-            for colname in columns_to_upload:
-                col = sqlalchemy.Column(colname, metadata)
-                col.alter(nullable=False, table=my_table)
+        if isinstance(is_not_null, list):
+            # There are some columns with Null values
+            columns_to_upload = [elem for elem in columns_to_upload if elem not in is_not_null]
+
+        print('_define fields as not null')
+        columns_to_upload.remove(primary_key)
+        for colname in columns_to_upload:
+            col = sqlalchemy.Column(colname, metadata)
+            col.alter(nullable=False, table=my_table)
 
         if is_unique:
             print('define a {} as unique column'.format(unique))
@@ -217,8 +212,7 @@ class DataForServerDictionaries:
     """
     this class helps to organise data for matching tables in server
     """
-    COLUMNS = ['walcycdata_id', 'osm_id', 'start_point_id', 'end_point_id']
-    PRIMARY_COLUMNS = ['walcycdata_id', 'osm_id']
+    COLUMNS = ['walcycdata_id', 'count_data_id', 'osm_id', 'start_point_id', 'end_point_id', "walcycdata_is_valid"]
 
     def __init__(self):
         # index store the relation to the refined network

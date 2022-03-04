@@ -31,17 +31,18 @@ def create_wkt_and_index(engine):
                         text(f"CREATE INDEX ON {PRODUCTION_SCHEME}.{table_name} using gist (geometry)"))
 
 
-def current_table():
+def current_table(table=None):
     inspector = inspect(engine)
     for table_name in inspector.get_table_names(schema=PRODUCTION_SCHEME):
-        print(table_name)
+        if table_name == table:
+            print(table_name)
 
 
 if __name__ == '__main__':
     engine = create_engine('postgresql://research:1234@34.142.109.94:5432/walcycdata')
 
-    create_wkt_and_index(engine)
-    grant_select_permissions_to_guest(engine)
-
-    print('Done')
+    # create_wkt_and_index(engine)
+    # grant_select_permissions_to_guest(engine)
+    current_table('relations_cars')
+    # print('Done')
     # current_table()
