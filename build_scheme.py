@@ -295,8 +295,8 @@ if __name__ == '__main__':
                              'matching_to_osm_incidents': True
                              }],
               'munich_data': [False, {'prepare_relations': False, 'add_projection_points_to_server': False,
-                                     'relations_for_server': True, 'draw_db': False}],
-              'multiple_time':[True,{'create_obj':True}]
+                                      'relations_for_server': True, 'draw_db': False}],
+              'multiple_time': [True, {'create_obj': True}],
               'analysis': [False, {'osm_network_local_network': False, 'analysis_relations': True}],
               'data_to_server': [False, {'osm': True, 'bikes': False, 'cars': False, 'incidents': False,
                                          'combined_network': False}]}
@@ -562,58 +562,66 @@ if __name__ == '__main__':
     if params['multiple_time'][0]:
         print('multiple_time')
         from classes.multiple_time import MultipleTime
-        local_params = params['analysis'][1]
+
+        local_params = params['multiple_time'][1]
         if local_params['create_obj']:
-            pass
-            # multiple_time = MultipleTime( counting=
-            #                               , segments= , nodes: GeoDataFrame)
+            fields_to_use = ['Type of counting', 'FromNodeFromSectionNo', 'ToNodeFromSectionNo', 'FromSectionNo',
+                             'FromNodeToSectionNo', 'ToNodeToSectionNo', 'ToSectionNo', 'Year', 'Month', 'Day',
+                             'Time From', 'Time To'
+                             ]
+            multiple_time = MultipleTime(counting=pd.read_csv('multipleTime/Munich cycl count data 2019 info.csv')
+                                         , segments=gpd.read_file("shp_files/pr_data.gpkg", layer='cycle_count',
+                                                                  driver="GPKG")
+                                         , nodes=gpd.read_file('shp_files/cycle_counting.gpkg',
+                                                               layer='Radnetz_VVD-M_Analyse_2019_node',
+                                                               driver="GPKG"),
+                                         fields_to_use=fields_to_use)
 
+        if params['analysis'][0]:
+            print('analysis')
+            from classes.Analysis import Analysis
 
-    if params['analysis'][0]:
-        print('analysis')
-        from classes.Analysis import Analysis
+            local_params = params['analysis'][1]
+            if local_params['osm_network_local_network']:
+                cat_file = pd.read_csv('shp_files/cat.csv')
+                osm_data = gpd.read_file("shp_files/matching_files.gpkg", layer='osm_gdf')
+                matching_data = gpd.read_file("shp_files/matching_files.gpkg", layer='count_osm_matching')[
+                    'osm_walcycdata_id'].unique()
+                results = Analysis.osm_network_local_network(osm_network=osm_data, osm_id_list=matching_data,
+                                                             cat_file=cat_file)
+                results.to_file("shp_files/matching_files.gpkg", layer='osm_linked_to_counting', driver="GPKG")
 
-        local_params = params['analysis'][1]
-        if local_params['osm_network_local_network']:
-            cat_file = pd.read_csv('shp_files/cat.csv')
-            osm_data = gpd.read_file("shp_files/matching_files.gpkg", layer='osm_gdf')
-            matching_data = gpd.read_file("shp_files/matching_files.gpkg", layer='count_osm_matching')[
-                'osm_walcycdata_id'].unique()
-            results = Analysis.osm_network_local_network(osm_network=osm_data, osm_id_list=matching_data,
-                                                         cat_file=cat_file)
-            results.to_file("shp_files/matching_files.gpkg", layer='osm_linked_to_counting', driver="GPKG")
+            if local_params['analysis_relations']:
+                cycle = gpd.read_file("shp_files/munich_data.gpkg", layer='matching_cycle', driver="GPKG")
+                cars = gpd.read_file("shp_files/munich_data.gpkg", layer='matching_car', driver="GPKG")
+                res, my_dict = Analysis.analysis_relations(cycle_db=cycle, cars_db=cars)
+                print(my_dict)
+                print(len(res))
+                print('_write results into disk')
 
-        if local_params['analysis_relations']:
-            cycle = gpd.read_file("shp_files/munich_data.gpkg", layer='matching_cycle', driver="GPKG")
-            cars = gpd.read_file("shp_files/munich_data.gpkg", layer='matching_car', driver="GPKG")
-            res, my_dict = Analysis.analysis_relations(cycle_db=cycle, cars_db=cars)
-            print(my_dict)
-            print(len(res))
-            print('_write results into disk')
+                res.to_csv(path_or_buf="shp_files/analysis/matching_with_relations.csv")
 
-            res.to_csv(path_or_buf="shp_files/analysis/matching_with_relations.csv")
+        if params['data_to_server'][0]:
+            local_params = params['data_to_server'][1]
 
-    if params['data_to_server'][0]:
-        local_params = params['data_to_server'][1]
+            if local_params['bikes']:
+                print("upload cycle_count_data")
+                my_cycle_count = gpd.read_file("shp_files/pr_data.gpkg", layer='cycle_counting')
+                my_cycle_count.to_postgis(name="cycle_count_data", con=engine, schema='production',
+                                          if_exists='replace',
+                                          dtype={'walcycdata_last_modified': sqlalchemy.types.DateTime})
+            if local_params['cars']:
+                print("upload car_count_data")
+                my_car_count = gpd.read_file("shp_files/pr_data.gpkg", layer='car_count', driver="GPKG")
+                my_car_count.to_postgis(name="car_count_data", con=engine, schema='production',
+                                        if_exists='replace',
+                                        dtype={'walcycdata_last_modified': sqlalchemy.types.DateTime})
 
-        if local_params['bikes']:
-            print("upload cycle_count_data")
-            my_cycle_count = gpd.read_file("shp_files/pr_data.gpkg", layer='cycle_count')
-            my_cycle_count.to_postgis(name="cycle_count_data", con=engine, schema='production',
-                                      if_exists='replace',
-                                      dtype={'walcycdata_last_modified': sqlalchemy.types.DateTime})
-        if local_params['cars']:
-            print("upload car_count_data")
-            my_car_count = gpd.read_file("shp_files/pr_data.gpkg", layer='car_count', driver="GPKG")
-            my_car_count.to_postgis(name="car_count_data", con=engine, schema='production',
-                                    if_exists='replace',
-                                    dtype={'walcycdata_last_modified': sqlalchemy.types.DateTime})
-
-        if local_params['combined_network']:
-            print("upload combined_network")
-            my_car_count = gpd.read_file("shp_files/matching_files.gpkg", layer='count_osm_matching', driver="GPKG")
-            my_car_count.to_postgis(name="combined_network", con=engine, schema='production',
-                                    if_exists='replace',
-                                    dtype={'walcycdata_last_modified': sqlalchemy.types.DateTime})
-        if local_params['incidents']:
-            pass
+            if local_params['combined_network']:
+                print("upload combined_network")
+                my_car_count = gpd.read_file("shp_files/matching_files.gpkg", layer='count_osm_matching', driver="GPKG")
+                my_car_count.to_postgis(name="combined_network", con=engine, schema='production',
+                                        if_exists='replace',
+                                        dtype={'walcycdata_last_modified': sqlalchemy.types.DateTime})
+            if local_params['incidents']:
+                pass
