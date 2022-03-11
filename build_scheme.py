@@ -567,15 +567,15 @@ if __name__ == '__main__':
         if local_params['create_obj']:
             fields_to_use = ['Type of counting', 'FromNodeFromSectionNo', 'ToNodeFromSectionNo', 'FromSectionNo',
                              'FromNodeToSectionNo', 'ToNodeToSectionNo', 'ToSectionNo', 'Year', 'Month', 'Day',
-                             'Time From', 'Time To'
-                             ]
-            multiple_time = MultipleTime(counting=pd.read_csv('multipleTime/Munich cycl count data 2019 info.csv')
-                                         , segments=gpd.read_file("shp_files/pr_data.gpkg", layer='cycle_count',
-                                                                  driver="GPKG")
-                                         , nodes=gpd.read_file('shp_files/cycle_counting.gpkg',
-                                                               layer='Radnetz_VVD-M_Analyse_2019_node',
-                                                               driver="GPKG"),
-                                         fields_to_use=fields_to_use)
+                             'Time From', 'Time To', 'ID_Kurzz', 'ID_Langzz']
+            multiple_time = MultipleTime(
+                counting=pd.read_csv('multipleTime/Munich cycl count data 2019 info.csv', low_memory=False)
+                , segments=gpd.read_file("shp_files/pr_data.gpkg", layer='cycle_count',
+                                         driver="GPKG")
+                , nodes=gpd.read_file('shp_files/cycle_counting.gpkg',
+                                      layer='Radnetz_VVD-M_Analyse_2019_node',
+                                      driver="GPKG"),
+                fields_to_use=fields_to_use)
 
         if params['analysis'][0]:
             print('analysis')

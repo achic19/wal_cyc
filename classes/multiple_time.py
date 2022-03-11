@@ -8,4 +8,14 @@ class MultipleTime:
     def __init__(self, counting: DataFrame, segments: GeoDataFrame, nodes: GeoDataFrame, fields_to_use: list):
         self.counting = counting[fields_to_use]
         print(self.counting.columns)
-        pd.Timestamp(tz='Europe/Berlin', year=2019, month=5, day=23, hour=6, minute=15)
+        self.counting['date_time_0'] = self.counting.apply(
+            lambda x: pd.Timestamp(year=x['Year'], month=x['Month'], day=x['Day'],
+                                   hour=int(x['Time From'].split(':')[0]), minute=int(x['Time From'].split(':')[1])),
+            axis=1)
+        self.counting['date_time_1'] = self.counting.apply(
+            lambda x: pd.Timestamp(year=x['Year'], month=x['Month'], day=x['Day'],
+                                   hour=int(x['Time From'].split(':')[0]), minute=int(x['Time To'].split(':')[1])),
+            axis=1)
+        h=0
+
+
